@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ table_name }} - Database Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            background-color: #f4f4f4;
+            color: #333;
+            display: flex;
+        }
+        .sidebar {
+            width: 200px;
+            background-color: #333;
+            color: white;
+            padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+            position: fixed;
+            overflow: auto;
+        }
+        .sidebar h2 {
+            text-align: center;
+            margin-top: 0;
+            border-bottom: 1px solid #555;
+            padding-bottom: 10px;
+        }
+        .sidebar ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .sidebar li {
+            margin-bottom: 10px;
+        }
+        .sidebar a {
+            display: block;
+            color: white;
+            text-decoration: none;
+            padding: 10px;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background-color: #555;
+        }
+        .content {
+            margin-left: 200px;
+            flex-grow: 1;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #555;
+            text-align: center;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            table-layout: fixed;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+            word-wrap: break-word;
+        }
+        th.sortable-header {
+            cursor: pointer;
+            user-select: none;
+        }
+        th.sortable-header:hover {
+            background-color: #e2e2e2;
+        }
+        tr.clickable-row {
+            cursor: pointer;
+        }
+        tr.clickable-row:hover {
+            background-color: #f1f1f1;
+        }
+        .sort-indicator {
+            margin-left: 5px;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .actions {
+            display: flex;
+            gap: 5px;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .actions button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            color: white;
+        }
+        .update-btn { background-color: #007bff; }
+        .delete-btn { background-color: #dc3545; }
+        .expand-btn { background-color: #28a745; }
+
+        .form-container {
+            margin-top: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .form-container h2 {
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+        .form-container form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        .form-container .form-group {
+            flex-grow: 1;
+        }
+        .form-container .form-group input,
+        .form-container .form-group select {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .form-container button {
+            padding: 8px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .filter-row td {
+            padding: 5px 12px;
+        }
+        .filter-row input {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+        }
+        {% for col, width in column_widths %}
+        .col-{{ col }} {
+            max-width: {{ width }}px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        {% endfor %}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>Tables</h2>
+        <ul>
+            {% for table in tables %}
+            <li>
+                <a href="{{ url_for('index', table_name=table) }}" class="{{ 'active' if table == table_name }}">
+                    {{ table | capitalize }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="content">
+        <div class="container">
+            <h1>Viewing Table: **{{ table_name }}**</h1>
+
+            {% if error %}
+            <div class="error">
+                <p>{{ error }}</p>
+            </div>
+            {% endif %}
+
+            <div class="form-container">
+                <h2>Add New Row</h2>
+                <form action="{{ url_for('add_row', table_name=table_name) }}" method="post">
+                    {% for col in schema.keys() %}
+                    {% if write_only_config and col == write_only_config['contributor_column'] %}
+                        {% else %}
+                        <div class="form-group">
+                            <label for="add_{{ col }}">{{ col }}:</label>
+                            {% if schema[col]['is_enum'] %}
+                            <select id="add_{{ col }}" name="{{ col }}">
+                                {% for value in schema[col]['enum_values'] %}
+                                <option value="{{ value }}">{{ value }}</option>
+                                {% endfor %}
+                            </select>
+                            {% else %}
+                            <input type="{{ schema[col]['html_input_type'] }}" id="add_{{ col }}" name="{{ col }}" {% if schema[col]['is_auto_increment'] %}placeholder="Auto-incremented" {% endif %}>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    {% endfor %}
+                    <button type="submit">Add Row</button>
+                </form>
+            </div>
+
+            {% if data or not columns %}
+            <table id="dataTable">
+                <thead>
+                    <tr>
+                        {% for col in columns %}
+                        <th onclick="sortTable({{ loop.index0 }})" class="col-{{ col }}">{{ col }}<span class="sort-indicator"></span></th>
+                        {% endfor %}
+                        {% if data %}
+                        <th>Actions</th>
+                        {% endif %}
+                    </tr>
+                    <tr class="filter-row">
+                        {% for col in columns %}
+                        <td><input type="text" placeholder="Search {{ col }}..." onkeyup="filterTable()"></td>
+                        {% endfor %}
+                        {% if data %}
+                        <td></td>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if data %}
+                    {% for row in data %}
+                    <tr class="{% if many_to_many_config or write_only_config %}clickable-row{% endif %}" onclick="{% if many_to_many_config or write_only_config %}redirectToExpandedView('{{ table_name }}', {% if primary_key is string %}'{{ row[primary_key] }}'{% else %}[{% for pk_col in primary_key %}'{{ row[pk_col] }}'{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}){% endif %}">
+                        {% for col in columns %}
+                        <td class="col-{{ col }}">{{ row[col] }}</td>
+                        {% endfor %}
+                        <td class="actions" onclick="event.stopPropagation();">
+                            {% if many_to_many_config or write_only_config %}
+                            <button class="expand-btn" onclick="redirectToExpandedView('{{ table_name }}', {% if primary_key is string %}'{{ row[primary_key] }}'{% else %}[{% for pk_col in primary_key %}'{{ row[pk_col] }}'{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %})">Expand</button>
+                            {% endif %}
+                            <form action="{{ url_for('delete_row', table_name=table_name) }}" method="post" style="display:inline;">
+                                {% if primary_key is string %}
+                                    <input type="hidden" name="{{ primary_key }}" value="{{ row[primary_key] }}">
+                                {% else %}
+                                    {% for pk_col in primary_key %}
+                                    <input type="hidden" name="{{ pk_col }}" value="{{ row[pk_col] }}">
+                                    {% endfor %}
+                                {% endif %}
+                                <button class="delete-btn" type="submit" onclick="return confirm('Are you sure you want to delete this row?');">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="{{ columns|length + 1 }}" style="text-align: center;">No data found.</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            <div class="form-container" id="update-form-container" style="display:none;">
+                <h2>Update Row</h2>
+                <form action="{{ url_for('update_row', table_name=table_name) }}" method="post" id="update-form">
+                    {% for col in columns %}
+                    <div class="form-group">
+                        <label for="update_{{ col }}">{{ col }}:</label>
+                        {% if schema[col]['is_enum'] %}
+                        <select id="update_{{ col }}" name="{{ col }}">
+                            {% for value in schema[col]['enum_values'] %}
+                            <option value="{{ value }}">{{ value }}</option>
+                            {% endfor %}
+                        </select>
+                        {% else %}
+                        <input type="{{ schema[col]['html_input_type'] }}" id="update_{{ col }}" name="{{ col }}">
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    <button type="submit">Update Row</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function redirectToExpandedView(tableName, rowId) {
+            let url;
+            if (Array.isArray(rowId)) {
+                // Composite primary key
+                url = `/${tableName}/${rowId.join('/')}`;
+            } else {
+                // Single primary key
+                url = `/${tableName}/${rowId}`;
+            }
+            window.location.href = url;
+        }
+        function filterTable() {
+            const table = document.getElementById('dataTable');
+            const tbody = table.getElementsByTagName('tbody')[0];
+            const filterInputs = table.querySelectorAll('.filter-row input');
+            const rows = tbody.getElementsByTagName('tr');
+            for (let i = 0; i < rows.length; i++) {
+                let rowMatches = true;
+                const cells = rows[i].getElementsByTagName('td');
+                if (cells.length < filterInputs.length) {
+                    continue;
+                }
+                for (let j = 0; j < filterInputs.length; j++) {
+                    const filterValue = filterInputs[j].value.toLowerCase();
+                    const cellText = cells[j].textContent || cells[j].innerText;
+                    if (filterValue !== '' && cellText.toLowerCase().indexOf(filterValue) === -1) {
+                        rowMatches = false;
+                        break;
+                    }
+                }
+                if (rowMatches) {
+                    rows[i].style.display = '';
+                } else {
+                    rows[i].style.display = 'none';
+                }
+            }
+        }
+        let currentSortColumn = -1;
+        let sortDirection = 'asc';
+        function sortTable(columnIndex) {
+            const table = document.getElementById('dataTable');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.rows);
+            const headers = table.querySelectorAll('th');
+            if (columnIndex < headers.length - 1) {
+                if (currentSortColumn === columnIndex) {
+                    sortDirection = (sortDirection === 'asc') ? 'desc' : 'asc';
+                } else {
+                    currentSortColumn = columnIndex;
+                    sortDirection = 'asc';
+                }
+                headers.forEach(header => {
+                    const indicator = header.querySelector('.sort-indicator');
+                    if (indicator) {
+                        indicator.textContent = '';
+                    }
+                });
+                const currentHeader = headers[columnIndex];
+                const indicator = currentHeader.querySelector('.sort-indicator');
+                if (indicator) {
+                     indicator.textContent = (sortDirection === 'asc') ? '▲' : '▼';
+                }
+            }
+            rows.sort((a, b) => {
+                const aText = a.cells[columnIndex].textContent.trim();
+                const bText = b.cells[columnIndex].textContent.trim();
+                if (!isNaN(aText) && !isNaN(bText) && aText !== '' && bText !== '') {
+                    const aNum = parseFloat(aText);
+                    const bNum = parseFloat(bText);
+                    return (sortDirection === 'asc') ? aNum - bNum : bNum - aNum;
+                } else {
+                    const comparison = aText.localeCompare(bText, undefined, { sensitivity: 'base' });
+                    return (sortDirection === 'asc') ? comparison : -comparison;
+                }
+            });
+            rows.forEach(row => {
+                tbody.appendChild(row);
+            });
+        }
+    </script>
+</body>
+</html>
