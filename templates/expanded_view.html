@@ -98,6 +98,11 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
+        .form-container .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
         .form-container button {
             padding: 8px 15px;
             background-color: #007bff;
@@ -135,6 +140,94 @@
             cursor: pointer;
             margin-left: 10px;
         }
+        .contributor-section {
+            margin-top: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #e8f5e8;
+        }
+        .contributor-info {
+            background-color: #d1edff;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .contributor-list {
+            margin: 15px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .add-contributor-form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 15px;
+        }
+        .add-contributor-form input {
+            flex-grow: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .add-contributor-form button {
+            padding: 8px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .fk-search-container {
+            position: relative;
+            margin-top: 5px;
+        }
+        .fk-search-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .fk-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ccc;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        .fk-search-result {
+            padding: 10px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+        .fk-search-result:hover {
+            background-color: #f5f5f5;
+        }
+        .fk-search-result:last-child {
+            border-bottom: none;
+        }
+        .fk-selected-display {
+            margin-top: 5px;
+            padding: 8px;
+            background-color: #e8f5e8;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #555;
+            cursor: pointer;
+            display: none;
+        }
+        .fk-selected-display:hover {
+            background-color: #d4edda;
+        }
     </style>
 </head>
 <body>
@@ -153,7 +246,13 @@
 
     <div class="content">
         <div class="container">
-            <h1>Expanded View: {{ table_name }} - {{ row_data[primary_key] }}</h1>
+            <h1>Expanded View: {{ table_name }} - 
+                {% if primary_key is string %}
+                    {{ row_data[primary_key] }}
+                {% else %}
+                    {% for pk_col in primary_key %}{{ row_data[pk_col] }}{% if not loop.last %}/{% endif %}{% endfor %}
+                {% endif %}
+            </h1>
             <a href="{{ url_for('index', table_name=table_name) }}">← Back to Table</a>
 
             {% if error %}
@@ -169,19 +268,114 @@
                     <div class="form-group">
                         <label for="update_{{ col }}">{{ col }}:</label>
                         {% if schema[col]['is_enum'] %}
-                        <select id="update_{{ col }}" name="{{ col }}">
+                        <select id="update_{{ col }}" name="{{ col }}" {% if schema[col]['is_read_only'] %}disabled{% endif %}>
                             {% for value in schema[col]['enum_values'] %}
                             <option value="{{ value }}" {% if row_data[col] == value %}selected{% endif %}>{{ value }}</option>
                             {% endfor %}
                         </select>
                         {% else %}
-                        <input type="{{ schema[col]['html_input_type'] }}" id="update_{{ col }}" name="{{ col }}" value="{{ row_data[col] if row_data[col] is not none else '' }}" {% if col == primary_key %}readonly{% endif %}>
+                        <input type="{{ schema[col]['html_input_type'] }}" id="update_{{ col }}" name="{{ col }}" 
+                               value="{{ row_data[col] if row_data[col] is not none else '' }}" 
+                               {% if schema[col]['is_read_only'] %}readonly{% endif %}>
+                        {% endif %}
+                        
+                        <!-- Add foreign key search if this column is a foreign key -->
+                        {% if schema[col].get('is_foreign_key') %}
+                        <div class="fk-search-container">
+                            <input type="text" 
+                                   class="fk-search-input" 
+                                   placeholder="Search {{ schema[col]['foreign_table'] }}..."
+                                   data-target-input="update_{{ col }}"
+                                   data-table="{{ schema[col]['foreign_table'] }}"
+                                   data-search-columns="{{ schema[col]['search_columns']|join(',') }}"
+                                   data-display-columns="{{ schema[col]['display_columns']|join(',') }}"
+                                   data-foreign-key="{{ schema[col]['foreign_key'] }}">
+                            <div class="fk-search-results"></div>
+                            <div class="fk-selected-display" onclick="showForeignKeySearch(this)">
+                                Click to search or change selection
+                            </div>
+                        </div>
                         {% endif %}
                     </div>
                     {% endfor %}
                     <button type="submit">Update Row</button>
                 </form>
             </div>
+
+            {% if write_only_config %}
+            <div class="contributor-section">
+                <h2>Contributors & Sharing</h2>
+                
+                <div class="contributor-info">
+                    <strong>Current Contributors:</strong>
+                    <div class="contributor-list">
+                        {% if row_data[write_only_config['contributor_column']] %}
+                            {% set contributors = row_data[write_only_config['contributor_column']].split(',') %}
+                            {% set current_user = session['db_user'] %}
+                            {% set is_first_contributor = contributors|first|trim == current_user %}
+                            {% for contributor in contributors %}
+                                <span style="display: inline-flex; align-items: center; background-color: {% if loop.first %}#28a745{% else %}#007bff{% endif %}; color: white; padding: 4px 8px; margin: 2px; border-radius: 4px;">
+                                    {{ contributor.strip() }}
+                                    {% if loop.first %}
+                                        <small style="margin-left: 5px;">(Owner)</small>
+                                    {% endif %}
+                                    {% if is_first_contributor and not loop.first %}
+                                        <form action="{{ url_for('remove_contributor', table_name=table_name) }}" method="post" style="display: inline; margin-left: 5px;">
+                                            {% if primary_key is string %}
+                                                <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
+                                            {% else %}
+                                                {% for pk_col in primary_key %}
+                                                    <input type="hidden" name="{{ pk_col }}" value="{{ row_data[pk_col] }}">
+                                                {% endfor %}
+                                            {% endif %}
+                                            <input type="hidden" name="contributor_to_remove" value="{{ contributor.strip() }}">
+                                            <button type="submit" style="background: none; border: none; color: white; cursor: pointer; font-size: 12px; padding: 0;" onclick="return confirm('Remove {{ contributor.strip() }} as contributor?')">×</button>
+                                        </form>
+                                    {% endif %}
+                                </span>
+                            {% endfor %}
+                        {% else %}
+                            <em>No contributors listed</em>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h3>Add New Contributor</h3>
+                <p><em>Note: Only the first contributor (owner) can add or remove other contributors.</em></p>
+                {% if row_data[write_only_config['contributor_column']] %}
+                    {% set contributors = row_data[write_only_config['contributor_column']].split(',') %}
+                    {% set current_user = session['db_user'] %}
+                    {% set is_first_contributor = contributors|first|trim == current_user %}
+                    {% if is_first_contributor %}
+                        <form action="{{ url_for('add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
+                            {% if primary_key is string %}
+                                <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
+                            {% else %}
+                                {% for pk_col in primary_key %}
+                                    <input type="hidden" name="{{ pk_col }}" value="{{ row_data[pk_col] }}">
+                                {% endfor %}
+                            {% endif %}
+                            <input type="text" name="new_contributor" placeholder="Enter username to add" required>
+                            <button type="submit">Add Contributor</button>
+                        </form>
+                    {% else %}
+                        <p style="color: #666; font-style: italic;">Only the owner ({{ contributors|first|trim }}) can add new contributors.</p>
+                    {% endif %}
+                {% else %}
+                    <form action="{{ url_for('add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
+                        {% if primary_key is string %}
+                            <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
+                        {% else %}
+                            {% for pk_col in primary_key %}
+                                <input type="hidden" name="{{ pk_col }}" value="{{ row_data[pk_col] }}">
+                            {% endfor %}
+                        {% endif %}
+                        <input type="text" name="new_contributor" placeholder="Enter username to add" required>
+                        <button type="submit">Add Contributor</button>
+                    </form>
+                {% endif %}
+            </div>
+            {% endif %}
 
             {% if many_to_many_config %}
             <div class="related-section">
@@ -192,9 +386,14 @@
                     <li class="related-item">
                         <span>{{ item[many_to_many_config['other_display_column']] }}</span>
                         <form action="{{ url_for('remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
-                            <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] if primary_key is string else row_data[primary_key[0]] }}">
-                            <input type="hidden" name="{{ many_to_many_config['fk_other'] }}" value="{{ item[many_to_many_config['fk_other']] }}">
-                            <button type="submit">Remove</button>
+                            {% if primary_key is string %}
+                                <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] }}">
+                            {% else %}
+                                <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key[0]] }}">
+                            {% endif %}
+                            <!-- Use the primary key of the other table, which should be the first value -->
+                            <input type="hidden" name="{{ many_to_many_config['fk_other'] }}" value="{{ item.values() | list | first }}">
+                            <button type="submit" onclick="return confirm('Remove this relationship?')">Remove</button>
                         </form>
                     </li>
                     {% endfor %}
@@ -203,16 +402,236 @@
                 <hr style="margin: 20px 0;">
 
                 <h3>Add a New {{ many_to_many_config['other_table'] | capitalize }}</h3>
-                <form action="{{ url_for('add_junction_entry', table_name=table_name) }}" method="post" style="display: flex; gap: 10px; align-items: center;">
-                    <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] }}">
-                    <select name="{{ many_to_many_config['fk_other'] }}" required>
-                        <option value="">Select an option</option>
-                        {% for option in all_other_options %}
-                        <option value="{{ option[many_to_many_config['fk_other']] }}">{{ option[many_to_many_config['other_display_column']] }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit">Add</button>
+                <form action="{{ url_for('add_junction_entry', table_name=table_name) }}" method="post" style="display: flex; gap: 10px; align-items: flex-start; max-width: 600px;">
+                    {% if primary_key is string %}
+                        <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] }}">
+                    {% else %}
+                        <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key[0]] }}">
+                    {% endif %}
+                    <div style="flex-grow: 1; min-width: 200px;">
+                        <div style="position: relative;">
+                            <input type="text" 
+                                   name="{{ many_to_many_config['fk_other'] }}" 
+                                   id="junction-id-input"
+                                   placeholder="Enter {{ many_to_many_config['other_table'] }} ID" 
+                                   required
+                                   style="width: 100%; padding: 8px 35px 8px 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                            <div id="verification-status" 
+                                 style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 16px; pointer-events: none;"></div>
+                        </div>
+                        <div id="verification-info" 
+                             style="margin-top: 5px; font-size: 12px; color: #666; min-height: 18px;"></div>
+                    </div>
+                    <button type="submit" 
+                            id="add-junction-btn" 
+                            disabled
+                            style="padding: 8px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; align-self: flex-start;">
+                        Add
+                    </button>
                 </form>
+                
+                <script>
+                let verificationTimeout;
+                const input = document.getElementById('junction-id-input');
+                const statusDiv = document.getElementById('verification-status');
+                const infoDiv = document.getElementById('verification-info');
+                const addButton = document.getElementById('add-junction-btn');
+                
+                // Get the main record ID
+                const mainId = {% if primary_key is string %}'{{ row_data[primary_key] }}'{% else %}'{{ row_data[primary_key[0]] }}'{% endif %};
+                
+                input.addEventListener('input', function() {
+                    const value = this.value.trim();
+                    
+                    // Clear previous timeout
+                    clearTimeout(verificationTimeout);
+                    
+                    if (value === '') {
+                        statusDiv.innerHTML = '';
+                        infoDiv.innerHTML = '';
+                        addButton.disabled = true;
+                        return;
+                    }
+                    
+                    // Show loading state
+                    statusDiv.innerHTML = '<span style="color: #ffc107;">⏳</span>';
+                    infoDiv.innerHTML = 'Verifying...';
+                    addButton.disabled = true;
+                    
+                    // Debounce the verification
+                    verificationTimeout = setTimeout(() => {
+                        verifyJunctionId(value);
+                    }, 500);
+                });
+                
+                async function verifyJunctionId(id) {
+                    try {
+                        const response = await fetch(`/verify_junction_id/{{ table_name }}/${mainId}/${id}`, {
+                            method: 'GET',
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.exists) {
+                            if (data.already_linked) {
+                                statusDiv.innerHTML = '<span style="color: #ffc107;">⚠️</span>';
+                                infoDiv.innerHTML = `Already linked to: ${data.display_name}`;
+                                addButton.disabled = true;
+                            } else {
+                                statusDiv.innerHTML = '<span style="color: #28a745;">✓</span>';
+                                infoDiv.innerHTML = `Found: ${data.display_name}`;
+                                addButton.disabled = false;
+                            }
+                        } else {
+                            statusDiv.innerHTML = '<span style="color: #dc3545;">✗</span>';
+                            infoDiv.innerHTML = 'ID not found';
+                            addButton.disabled = true;
+                        }
+                    } catch (error) {
+                        console.error('Verification error:', error);
+                        statusDiv.innerHTML = '<span style="color: #dc3545;">⚠️</span>';
+                        infoDiv.innerHTML = 'Verification failed';
+                        addButton.disabled = true;
+                    }
+                }
+                </script>
+                
+                <script>
+                // Foreign Key Search functionality
+                let fkSearchTimeouts = {};
+                
+                document.addEventListener('DOMContentLoaded', function() {
+                    // Initialize foreign key search inputs
+                    document.querySelectorAll('.fk-search-input').forEach(input => {
+                        const targetInput = document.getElementById(input.dataset.targetInput);
+                        const selectedDisplay = input.parentElement.querySelector('.fk-selected-display');
+                        
+                        // Load current selection if exists
+                        if (targetInput.value) {
+                            loadForeignKeyDisplay(input, targetInput.value);
+                        }
+                        
+                        input.addEventListener('input', function() {
+                            handleForeignKeySearch(this);
+                        });
+                        
+                        input.addEventListener('focus', function() {
+                            if (this.value.length >= 1) {
+                                handleForeignKeySearch(this);
+                            }
+                        });
+                        
+                        input.addEventListener('blur', function() {
+                            // Delay hiding results to allow clicks
+                            setTimeout(() => {
+                                const results = this.parentElement.querySelector('.fk-search-results');
+                                results.style.display = 'none';
+                            }, 200);
+                        });
+                    });
+                });
+                
+                function handleForeignKeySearch(input) {
+                    const query = input.value.trim();
+                    const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+                    const inputId = input.dataset.targetInput;
+                    
+                    // Clear previous timeout
+                    if (fkSearchTimeouts[inputId]) {
+                        clearTimeout(fkSearchTimeouts[inputId]);
+                    }
+                    
+                    if (query.length < 1) {
+                        resultsDiv.style.display = 'none';
+                        return;
+                    }
+                    
+                    // Debounce the search
+                    fkSearchTimeouts[inputId] = setTimeout(() => {
+                        searchForeignKey(input, query);
+                    }, 300);
+                }
+                
+                async function searchForeignKey(input, query) {
+                    const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+                    const table = input.dataset.table;
+                    const searchColumns = input.dataset.searchColumns;
+                    
+                    try {
+                        resultsDiv.innerHTML = '<div class="fk-search-result">Searching...</div>';
+                        resultsDiv.style.display = 'block';
+                        
+                        const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
+                        const data = await response.json();
+                        
+                        if (data.results && data.results.length > 0) {
+                            resultsDiv.innerHTML = '';
+                            data.results.forEach(result => {
+                                const resultDiv = document.createElement('div');
+                                resultDiv.className = 'fk-search-result';
+                                resultDiv.innerHTML = result.display;
+                                resultDiv.onclick = () => selectForeignKey(input, result.id, result.display);
+                                resultsDiv.appendChild(resultDiv);
+                            });
+                        } else {
+                            resultsDiv.innerHTML = '<div class="fk-search-result">No results found</div>';
+                        }
+                    } catch (error) {
+                        console.error('Search error:', error);
+                        resultsDiv.innerHTML = '<div class="fk-search-result">Search failed</div>';
+                    }
+                }
+                
+                function selectForeignKey(searchInput, id, display) {
+                    const targetInput = document.getElementById(searchInput.dataset.targetInput);
+                    const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+                    const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
+                    
+                    // Set the ID in the hidden input
+                    targetInput.value = id;
+                    
+                    // Update the display
+                    selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
+                    selectedDisplay.style.display = 'block';
+                    
+                    // Hide search input and results
+                    searchInput.style.display = 'none';
+                    resultsDiv.style.display = 'none';
+                }
+                
+                function showForeignKeySearch(displayElement) {
+                    const container = displayElement.parentElement;
+                    const searchInput = container.querySelector('.fk-search-input');
+                    
+                    // Show search input and focus it
+                    searchInput.style.display = 'block';
+                    searchInput.focus();
+                    searchInput.select();
+                    
+                    // Hide display element temporarily
+                    displayElement.style.display = 'none';
+                }
+                
+                async function loadForeignKeyDisplay(searchInput, id) {
+                    const table = searchInput.dataset.table;
+                    const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+                    
+                    if (!id) return;
+                    
+                    try {
+                        const response = await fetch(`/get_foreign_key_display/${table}/${id}`);
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
+                            selectedDisplay.style.display = 'block';
+                            searchInput.style.display = 'none';
+                        }
+                    } catch (error) {
+                        console.error('Error loading FK display:', error);
+                    }
+                }
+                </script>
             </div>
             {% endif %}
 

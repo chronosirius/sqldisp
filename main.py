@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 import pymysql
 import re
-from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT, TABLES_TO_SHOW, PRIMARY_KEYS, COLUMN_WIDTHS, MANY_TO_MANY_CONFIG, WRITE_ONLY_CONFIG, READ_ONLY_COLUMNS, HIDDEN_COLUMNS, VISIBLE_COLUMNS
+from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT, TABLES_TO_SHOW, PRIMARY_KEYS, COLUMN_WIDTHS, MANY_TO_MANY_CONFIG, WRITE_ONLY_CONFIG, READ_ONLY_COLUMNS, HIDDEN_COLUMNS, VISIBLE_COLUMNS, FOREIGN_KEY_CONFIG
 
 app = Flask(__name__)
 app.secret_key = 'your_super_secret_key'
@@ -24,6 +24,22 @@ def get_table_schema(connection, table_name):
     with connection.cursor() as cursor:
         cursor.execute(f"DESCRIBE `{table_name}`")
         schema = cursor.fetchall()
+        
+        # Get foreign key information
+        cursor.execute(f"""
+            SELECT 
+                COLUMN_NAME,
+                REFERENCED_TABLE_NAME,
+                REFERENCED_COLUMN_NAME
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = %s 
+            AND REFERENCED_TABLE_NAME IS NOT NULL
+        """, (table_name,))
+        foreign_keys = {row['COLUMN_NAME']: {
+            'table': row['REFERENCED_TABLE_NAME'], 
+            'column': row['REFERENCED_COLUMN_NAME']
+        } for row in cursor.fetchall()}
 
     hidden_cols = HIDDEN_COLUMNS.get(table_name, [])
     read_only_cols = READ_ONLY_COLUMNS.get(table_name, [])
@@ -58,6 +74,23 @@ def get_table_schema(connection, table_name):
         is_primary_key = col['Key'] == 'PRI'
         is_read_only = is_primary_key or col_name in read_only_cols
         
+        # Check if this is a foreign key
+        is_foreign_key = col_name in foreign_keys
+        foreign_key_info = {}
+        
+        if is_foreign_key:
+            fk_info = foreign_keys[col_name]
+            # Check if we have custom FK config
+            fk_config = FOREIGN_KEY_CONFIG.get(table_name, {}).get(col_name, {})
+            
+            foreign_key_info = {
+                'is_foreign_key': True,
+                'foreign_table': fk_info['table'],
+                'foreign_key': fk_info['column'],
+                'search_columns': fk_config.get('search_columns', ['name', 'title', 'description']),
+                'display_columns': fk_config.get('display_columns', ['name', 'title', 'description'])
+            }
+        
         columns_info[col_name] = {
             'type': col_type,
             'is_enum': is_enum,
@@ -65,8 +98,10 @@ def get_table_schema(connection, table_name):
             'is_primary_key': is_primary_key,
             'is_auto_increment': 'auto_increment' in col['Extra'].lower(),
             'html_input_type': html_input_type,
-            'is_read_only': is_read_only
+            'is_read_only': is_read_only,
+            **foreign_key_info
         }
+    
     return columns_info
 
 
@@ -708,11 +743,281 @@ def share_row(table_name):
     else:
         return redirect(url_for('expanded_view', table_name=table_name, row_id=pk_value))
 
+@app.route('/<string:table_name>/remove_contributor', methods=['POST'])
+def remove_contributor(table_name):
+    connection = None
+    if 'db_user' not in session:
+        return redirect(url_for('login'))
+        
+    # Check if the table is configured for write-only mode and has a contributor column
+    if table_name not in WRITE_ONLY_CONFIG:
+        return redirect(url_for('index', table_name=table_name, error="This feature is not enabled for this table."))
+
+    try:
+        connection = get_db_connection(session['db_user'], session['db_password'])
+        with connection.cursor() as cursor:
+            primary_key_config = PRIMARY_KEYS.get(table_name)
+            contributor_column = WRITE_ONLY_CONFIG[table_name]['contributor_column']
+            contributor_to_remove = request.form.get('contributor_to_remove')
+            
+            if not contributor_to_remove:
+                return redirect(url_for('index', table_name=table_name, error="No contributor specified for removal."))
+            
+            # Get the primary key value(s) from the form and construct WHERE clause
+            if isinstance(primary_key_config, list):
+                pk_values = {col: request.form.get(col) for col in primary_key_config}
+                where_clauses = [f"`{col}` = %s" for col in primary_key_config]
+                where_clause = ' AND '.join(where_clauses)
+                pk_params = [pk_values[col] for col in primary_key_config]
+                
+                # First, get the current contributors and verify current user is the first one
+                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause}"
+                cursor.execute(select_sql, tuple(pk_params))
+                current_row = cursor.fetchone()
+                
+                if not current_row:
+                    return redirect(url_for('index', table_name=table_name, error="Row not found."))
+                
+                row_id_path = '/'.join(str(pk_values[col]) for col in primary_key_config)
+            else:
+                pk_value = request.form.get(primary_key_config)
+                where_clause = f"`{primary_key_config}` = %s"
+                pk_params = [pk_value]
+                
+                # First, get the current contributors and verify current user is the first one
+                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause}"
+                cursor.execute(select_sql, tuple(pk_params))
+                current_row = cursor.fetchone()
+                
+                if not current_row:
+                    return redirect(url_for('expanded_view', table_name=table_name, row_id=pk_value, error="Row not found."))
+                
+                row_id_path = pk_value
+
+            # Parse current contributors (assuming comma-separated)
+            current_contributors = current_row[contributor_column]
+            if not current_contributors:
+                return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="No contributors found."))
+                
+            contributors_list = [c.strip() for c in current_contributors.split(',')]
+            
+            # Check if current user is the first contributor (owner)
+            if not contributors_list or contributors_list[0] != session['db_user']:
+                return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="Only the owner can remove contributors."))
+            
+            # Check if trying to remove the first contributor (owner)
+            if contributor_to_remove == contributors_list[0]:
+                return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="The owner cannot be removed. Transfer ownership to someone else first if needed."))
+            
+            # Remove the contributor if they exist
+            if contributor_to_remove in contributors_list:
+                contributors_list.remove(contributor_to_remove)
+                new_contributors_str = ','.join(contributors_list)
+                
+                # Update the row
+                update_sql = f"UPDATE `{table_name}` SET `{contributor_column}` = %s WHERE {where_clause}"
+                cursor.execute(update_sql, tuple([new_contributors_str] + pk_params))
+                connection.commit()
+            else:
+                return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="Contributor not found in the list."))
+        
+    except Exception as e:
+        print(f"Error removing contributor: {e}")
+        return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error=str(e)))
+    finally:
+        if connection:
+            connection.close()
+
+    return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
+
 @app.route('/')
 def root_redirect():
     if not DEFAULT_TABLE:
         return "No tables are configured to be shown."
     return redirect(url_for('index', table_name=DEFAULT_TABLE))
+
+
+@app.route('/verify_junction_id/<string:table_name>/<string:main_id>/<string:junction_id>')
+def verify_junction_id(table_name, main_id, junction_id):
+    """Verifies if a junction ID exists and returns information about it."""
+    from flask import jsonify
+    
+    connection = None
+    if 'db_user' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+        
+    config = MANY_TO_MANY_CONFIG.get(table_name)
+    if not config:
+        return jsonify({'error': 'No many-to-many config found'}), 400
+
+    try:
+        connection = get_db_connection(session['db_user'], session['db_password'])
+        with connection.cursor() as cursor:
+            other_table = config['other_table']
+            other_display_column = config['other_display_column']
+            junction_table = config['junction_table']
+            fk_self = config['fk_self']
+            fk_other = config['fk_other']
+            other_pk = PRIMARY_KEYS.get(other_table, 'id')
+            
+            # Handle composite primary keys for the other table
+            if isinstance(other_pk, list):
+                # For composite keys, we'd need to handle this differently
+                # For now, assume single primary key for the other table
+                other_pk = other_pk[0]
+            
+            # Check if the ID exists in the other table
+            check_sql = f"SELECT `{other_pk}`, `{other_display_column}` FROM `{other_table}` WHERE `{other_pk}` = %s"
+            cursor.execute(check_sql, (junction_id,))
+            other_record = cursor.fetchone()
+            
+            if not other_record:
+                return jsonify({
+                    'exists': False,
+                    'already_linked': False,
+                    'display_name': None
+                })
+            
+            # Check if this relationship already exists
+            junction_check_sql = f"SELECT COUNT(*) as count FROM `{junction_table}` WHERE `{fk_self}` = %s AND `{fk_other}` = %s"
+            cursor.execute(junction_check_sql, (main_id, junction_id))
+            junction_result = cursor.fetchone()
+            
+            already_linked = junction_result['count'] > 0
+            
+            return jsonify({
+                'exists': True,
+                'already_linked': already_linked,
+                'display_name': other_record[other_display_column]
+            })
+            
+    except Exception as e:
+        print(f"Error verifying junction ID: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
+
+@app.route('/search_foreign_key/<string:table_name>')
+def search_foreign_key(table_name):
+    """Search for foreign key options based on query."""
+    from flask import jsonify
+    
+    connection = None
+    if 'db_user' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    query = request.args.get('q', '').strip()
+    search_columns_param = request.args.get('columns', '')
+    
+    if not query:
+        return jsonify({'results': []})
+    
+    try:
+        connection = get_db_connection(session['db_user'], session['db_password'])
+        with connection.cursor() as cursor:
+            search_columns = [col.strip() for col in search_columns_param.split(',') if col.strip()]
+            
+            if not search_columns:
+                return jsonify({'results': []})
+            
+            # Get the primary key of the foreign table
+            foreign_pk = PRIMARY_KEYS.get(table_name, 'id')
+            if isinstance(foreign_pk, list):
+                foreign_pk = foreign_pk[0]  # Use first column of composite key
+            
+            # Build search conditions
+            search_conditions = []
+            search_params = []
+            
+            for col in search_columns:
+                search_conditions.append(f"`{col}` LIKE %s")
+                search_params.append(f"%{query}%")
+            
+            # Get all columns for display
+            all_columns = search_columns.copy()
+            if foreign_pk not in all_columns:
+                all_columns.insert(0, foreign_pk)
+            
+            columns_sql = ', '.join([f'`{col}`' for col in all_columns])
+            where_clause = ' OR '.join(search_conditions)
+            
+            sql = f"SELECT {columns_sql} FROM `{table_name}` WHERE {where_clause} LIMIT 10"
+            cursor.execute(sql, tuple(search_params))
+            results = cursor.fetchall()
+            
+            # Format results
+            formatted_results = []
+            for row in results:
+                # Create display string
+                display_parts = []
+                for col in search_columns:
+                    if row.get(col):
+                        display_parts.append(f"{col}: {row[col]}")
+                
+                formatted_results.append({
+                    'id': row[foreign_pk],
+                    'display': ' | '.join(display_parts) if display_parts else f"ID: {row[foreign_pk]}"
+                })
+            
+            return jsonify({'results': formatted_results})
+            
+    except Exception as e:
+        print(f"Error searching foreign key: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
+
+@app.route('/get_foreign_key_display/<string:table_name>/<string:record_id>')
+def get_foreign_key_display(table_name, record_id):
+    """Get display information for a specific foreign key record."""
+    from flask import jsonify
+    
+    connection = None
+    if 'db_user' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        connection = get_db_connection(session['db_user'], session['db_password'])
+        with connection.cursor() as cursor:
+            # Get the primary key of the foreign table
+            foreign_pk = PRIMARY_KEYS.get(table_name, 'id')
+            if isinstance(foreign_pk, list):
+                foreign_pk = foreign_pk[0]  # Use first column of composite key
+            
+            # Get all columns to build display
+            cursor.execute(f"SELECT * FROM `{table_name}` WHERE `{foreign_pk}` = %s", (record_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return jsonify({'success': False, 'error': 'Record not found'})
+            
+            # Create a simple display string with key information
+            display_parts = []
+            for key, value in row.items():
+                if key != foreign_pk and value is not None:
+                    display_parts.append(f"{key}: {value}")
+            
+            display = ' | '.join(display_parts[:3]) if display_parts else f"Record ID: {record_id}"
+            
+            return jsonify({
+                'success': True,
+                'display': display
+            })
+            
+    except Exception as e:
+        print(f"Error getting foreign key display: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if connection:
+            connection.close()
+
+
+# Update the get_table_schema function to detect foreign keys:
+
 
 @app.route('/favicon.ico')
 def favicon():

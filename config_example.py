@@ -64,3 +64,22 @@ HIDDEN_COLUMNS = {
 VISIBLE_COLUMNS = {
     'users': ['id', 'username', 'email', 'gender'],
 }
+
+FOREIGN_KEY_CONFIG = {
+    'users': {
+        'group_id': {
+            'foreign_table': 'groups',
+            'foreign_key': 'id',
+            'search_columns': ['name', 'description'],
+            'display_columns': ['name', 'description', 'creation_date']
+        }
+    },
+    'databank': {
+        'author_id': {
+            'foreign_table': 'users',
+            'foreign_key': 'id',
+            'search_columns': ['username', 'email'],
+            'display_columns': ['username', 'email', 'gender']
+        }
+    }
+}
