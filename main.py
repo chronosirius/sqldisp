@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 import pymysql
 import re
-from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT, TABLES_TO_SHOW, PRIMARY_KEYS, COLUMN_WIDTHS, MANY_TO_MANY_CONFIG, WRITE_ONLY_CONFIG, READ_ONLY_COLUMNS, HIDDEN_COLUMNS, VISIBLE_COLUMNS, FOREIGN_KEY_CONFIG
+from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT, TABLES_TO_SHOW, PRIMARY_KEYS, COLUMN_WIDTHS, MANY_TO_MANY_CONFIG, WRITE_ONLY_CONFIG, READ_ONLY_COLUMNS, HIDDEN_COLUMNS, VISIBLE_COLUMNS, FOREIGN_KEY_CONFIG, DUPLICATE_KEY_CONFIG
 
 app = Flask(__name__)
 app.secret_key = 'your_super_secret_key'
@@ -129,6 +129,54 @@ def login():
     error = request.args.get('error')
     return render_template('login.html', error=error)
 
+def get_foreign_key_display_text(connection, table_name, fk_column, fk_value):
+    """Helper function to get display text for a foreign key value."""
+    if not fk_value:
+        return None
+    
+    fk_config = FOREIGN_KEY_CONFIG.get(table_name, {}).get(fk_column, {})
+    if not fk_config:
+        return str(fk_value)
+    
+    try:
+        with connection.cursor() as cursor:
+            foreign_table = fk_config['foreign_table']
+            foreign_key = fk_config['foreign_key']
+            display_columns = fk_config.get('display_columns', ['name', 'title', 'description'])
+            
+            # Get the primary key of the foreign table
+            foreign_pk = PRIMARY_KEYS.get(foreign_table, 'id')
+            if isinstance(foreign_pk, list):
+                foreign_pk = foreign_pk[0]  # Use first column of composite key
+            
+            # Build the select statement
+            select_columns = [f'`{col}`' for col in display_columns if col != foreign_key]
+            if foreign_key not in display_columns:
+                select_columns.insert(0, f'`{foreign_key}`')
+            
+            columns_sql = ', '.join(select_columns)
+            sql = f"SELECT {columns_sql} FROM `{foreign_table}` WHERE `{foreign_key}` = %s"
+            cursor.execute(sql, (fk_value,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return f"ID: {fk_value} (not found)"
+            
+            # Create display string
+            display_parts = []
+            for col in display_columns:
+                if col in row and row[col] is not None:
+                    display_parts.append(f"{col}: {row[col]}")
+            
+            if display_parts:
+                return ' | '.join(display_parts[:3])  # Limit to 3 parts
+            else:
+                return f"ID: {fk_value}"
+                
+    except Exception as e:
+        print(f"Error getting FK display: {e}")
+        return f"ID: {fk_value}"
+
 @app.route('/logout')
 def logout():
     """Logs the user out by clearing the session."""
@@ -143,6 +191,7 @@ def index(table_name):
     columns_to_display = []
     schema = {}
     error = None
+    fk_display_data = {}
 
     if table_name not in TABLES_TO_SHOW:
         error = f"Error: Table '{table_name}' is not configured to be shown."
@@ -187,6 +236,24 @@ def index(table_name):
 
             data = cursor.fetchall()
             
+            # Get foreign key display data for each row
+            if data:
+                primary_key_config = PRIMARY_KEYS.get(table_name)
+                for row in data:
+                    # Create row identifier
+                    if isinstance(primary_key_config, list):
+                        row_id = '/'.join(str(row[pk]) for pk in primary_key_config)
+                    else:
+                        row_id = str(row[primary_key_config])
+                    
+                    fk_display_data[row_id] = {}
+                    
+                    # Get display text for each foreign key column in this row
+                    for col in columns_to_display:
+                        if schema[col].get('is_foreign_key') and row[col] is not None:
+                            display_text = get_foreign_key_display_text(connection, table_name, col, row[col])
+                            fk_display_data[row_id][col] = display_text
+            
     except Exception as e:
         error = f"Error connecting to or querying the database: {e}"
         print(error)
@@ -208,7 +275,8 @@ def index(table_name):
         column_widths=COLUMN_WIDTHS.get(table_name, []),
         many_to_many_config=MANY_TO_MANY_CONFIG.get(table_name),
         write_only_config=WRITE_ONLY_CONFIG.get(table_name),
-        read_only_columns=READ_ONLY_COLUMNS.get(table_name, [])
+        read_only_columns=READ_ONLY_COLUMNS.get(table_name, []),
+        fk_display_data=fk_display_data
     )
 
 @app.route('/<string:table_name>/<path:row_id>')
@@ -216,8 +284,7 @@ def expanded_view(table_name, row_id):
     connection = None
     error = request.args.get('error')
     row_data = None
-    related_data = []
-    all_other_options = []
+    all_junction_data = []  # Changed to support multiple junction configurations
     
     if 'db_user' not in session:
         return redirect(url_for('login'))
@@ -227,7 +294,7 @@ def expanded_view(table_name, row_id):
         schema = get_table_schema(connection, table_name)
         
         with connection.cursor() as cursor:
-            # 1. Fetch the main row data
+            # 1. Fetch the main row data with proper permission checking
             primary_key_config = PRIMARY_KEYS.get(table_name)
             
             # Handle composite vs single primary key
@@ -243,9 +310,7 @@ def expanded_view(table_name, row_id):
                         schema=schema,
                         error=error,
                         primary_key=primary_key_config,
-                        many_to_many_config=None,
-                        related_data=[],
-                        all_other_options=[],
+                        all_junction_data=[],
                         tables=TABLES_TO_SHOW,
                         write_only_config=WRITE_ONLY_CONFIG.get(table_name)
                     )
@@ -254,7 +319,7 @@ def expanded_view(table_name, row_id):
                 where_clauses = [f"`{col}` = %s" for col in primary_key_config]
                 pk_values = pk_parts
                 
-                # Check if the table is write-only and apply filtering
+                # CRITICAL: Check if the table is write-only and apply proper filtering
                 is_write_only = table_name in WRITE_ONLY_CONFIG
                 if is_write_only:
                     contributor_column = WRITE_ONLY_CONFIG[table_name]['contributor_column']
@@ -272,7 +337,7 @@ def expanded_view(table_name, row_id):
                 # Single primary key
                 primary_key = primary_key_config
                 
-                # Check if the table is write-only and apply filtering
+                # CRITICAL: Check if the table is write-only and apply proper filtering
                 is_write_only = table_name in WRITE_ONLY_CONFIG
                 
                 if is_write_only:
@@ -287,10 +352,10 @@ def expanded_view(table_name, row_id):
             
             row_data = cursor.fetchone()
             
-            # If no row found, return error
+            # CRITICAL: If no row found, this means either the row doesn't exist OR user has no permission
             if not row_data:
                 if table_name in WRITE_ONLY_CONFIG:
-                    error = "Row not found or you don't have permission to view it."
+                    error = "Access denied: You don't have permission to view this row, or it doesn't exist."
                 else:
                     error = "Row not found."
                 return render_template(
@@ -300,37 +365,94 @@ def expanded_view(table_name, row_id):
                     schema=schema,
                     error=error,
                     primary_key=primary_key_config,
-                    many_to_many_config=None,
-                    related_data=[],
-                    all_other_options=[],
+                    all_junction_data=[],
                     tables=TABLES_TO_SHOW,
                     write_only_config=WRITE_ONLY_CONFIG.get(table_name)
                 )
 
-            # 2. Check for many-to-many relationship and fetch related data
-            config = MANY_TO_MANY_CONFIG.get(table_name)
-            if config:
+            # 2. Handle multiple junction table configurations
+            junction_configs = MANY_TO_MANY_CONFIG.get(table_name, [])
+            
+            # Support both old single config format and new list format
+            if isinstance(junction_configs, dict):
+                junction_configs = [junction_configs]
+            
+            for config in junction_configs:
                 junction_table = config['junction_table']
                 fk_self = config['fk_self']
                 fk_other = config['fk_other']
                 other_table = config['other_table']
                 other_display_column = config['other_display_column']
+                extra_columns = config.get('extra_columns', [])
+                show_multiple_rows = config.get('show_multiple_rows', False)
+                junction_pk = config.get('junction_primary_key', [fk_self, fk_other])
+                relationship_name = config.get('name', other_table)
+                
                 other_pk = PRIMARY_KEYS.get(other_table)
+                if isinstance(other_pk, list):
+                    other_pk = other_pk[0]  # Use first column for composite keys
 
-                # Fetch all related items using the main primary key value
-                sql_related = (
-                    f"SELECT t2.{other_pk}, t2.{other_display_column} "
-                    f"FROM `{junction_table}` AS t1 "
-                    f"JOIN `{other_table}` AS t2 ON t1.{fk_other} = t2.{other_pk} "
-                    f"WHERE t1.{fk_self} = %s"
-                )
-                cursor.execute(sql_related, (main_pk_value,))
-                related_data = cursor.fetchall()
+                junction_data = {
+                    'config': config,
+                    'relationship_name': relationship_name,
+                    'rows': [],
+                    'all_other_options': [],
+                    'junction_schema': {},
+                    'other_table_schema': {}
+                }
 
-                # Fetch all possible items to populate the dropdown
-                sql_all_options = f"SELECT {other_pk}, {other_display_column} FROM `{other_table}`"
-                cursor.execute(sql_all_options)
-                all_other_options = cursor.fetchall()
+                # Get schema for junction table
+                junction_data['junction_schema'] = get_table_schema(connection, junction_table)
+                junction_data['other_table_schema'] = get_table_schema(connection, other_table)
+
+                if show_multiple_rows:
+                    # Fetch all junction table rows with related table data
+                    junction_columns = [f"j.`{col}`" for col in [fk_self, fk_other] + extra_columns]
+                    other_columns = [f"t2.`{other_pk}` as other_pk", f"t2.`{other_display_column}` as other_display"]
+                    
+                    # Add more columns from other table for self-references
+                    if other_table == table_name:
+                        # For self-references, get more detail columns
+                        other_detail_columns = [col for col in junction_data['other_table_schema'].keys() 
+                                              if col not in [other_pk, other_display_column]][:3]  # Limit to 3 extra columns
+                        for col in other_detail_columns:
+                            other_columns.append(f"t2.`{col}` as other_{col}")
+                    
+                    all_columns = junction_columns + other_columns
+                    
+                    sql_junction = (
+                        f"SELECT {', '.join(all_columns)} "
+                        f"FROM `{junction_table}` AS j "
+                        f"JOIN `{other_table}` AS t2 ON j.{fk_other} = t2.{other_pk} "
+                        f"WHERE j.{fk_self} = %s"
+                    )
+                    cursor.execute(sql_junction, (main_pk_value,))
+                    junction_data['rows'] = cursor.fetchall()
+                else:
+                    # Original behavior - just show related items
+                    sql_related = (
+                        f"SELECT t2.{other_pk}, t2.{other_display_column} "
+                        f"FROM `{junction_table}` AS j "
+                        f"JOIN `{other_table}` AS t2 ON j.{fk_other} = t2.{other_pk} "
+                        f"WHERE j.{fk_self} = %s"
+                    )
+                    cursor.execute(sql_related, (main_pk_value,))
+                    junction_data['rows'] = cursor.fetchall()
+
+                # Fetch all possible items for the dropdown (with permission filtering)
+                if other_table in WRITE_ONLY_CONFIG:
+                    other_contributor_column = WRITE_ONLY_CONFIG[other_table]['contributor_column']
+                    sql_all_options = (
+                        f"SELECT {other_pk}, {other_display_column} FROM `{other_table}` "
+                        f"WHERE `{other_contributor_column}` LIKE %s"
+                    )
+                    cursor.execute(sql_all_options, (f"%{session['db_user']}%",))
+                else:
+                    sql_all_options = f"SELECT {other_pk}, {other_display_column} FROM `{other_table}`"
+                    cursor.execute(sql_all_options)
+                junction_data['all_other_options'] = cursor.fetchall()
+                
+                all_junction_data.append(junction_data)
             
     except Exception as e:
         error = f"Error: {e}"
@@ -347,12 +469,10 @@ def expanded_view(table_name, row_id):
         schema=schema,
         error=error,
         primary_key=PRIMARY_KEYS.get(table_name),
-        many_to_many_config=config,
-        related_data=related_data,
-        all_other_options=all_other_options,
+        all_junction_data=all_junction_data,
         tables=TABLES_TO_SHOW,
         write_only_config=WRITE_ONLY_CONFIG.get(table_name),
-        row_id_param=row_id  # Pass the original row_id parameter for URL generation
+        row_id_param=row_id
     )
 
 @app.route('/<string:table_name>/add_row', methods=['POST'])
@@ -397,8 +517,94 @@ def add_row(table_name):
             cols = ', '.join(f'`{key}`' for key in cleaned_data.keys())
             placeholders = ', '.join(['%s'] * len(cleaned_data))
             sql = f"INSERT INTO `{table_name}` ({cols}) VALUES ({placeholders})"
-            cursor.execute(sql, list(cleaned_data.values()))
-        connection.commit()
+            
+            try:
+                cursor.execute(sql, list(cleaned_data.values()))
+                connection.commit()
+                
+                # On successful creation, redirect to main table view
+                return redirect(url_for('index', table_name=table_name))
+                
+            except Exception as insert_error:
+                # Check if it's a duplicate key error and we have duplicate key config
+                if "Duplicate entry" in str(insert_error) and table_name in WRITE_ONLY_CONFIG and table_name in DUPLICATE_KEY_CONFIG:
+                    # Try to add the user as a contributor to the existing row using configured duplicate keys
+                    try:
+                        contributor_column = WRITE_ONLY_CONFIG[table_name]['contributor_column']
+                        duplicate_keys = DUPLICATE_KEY_CONFIG[table_name]
+                        
+                        # Build search conditions using only the configured duplicate key fields
+                        search_conditions = []
+                        search_params = []
+                        
+                        for key in duplicate_keys:
+                            if key in cleaned_data:
+                                search_conditions.append(f"`{key}` = %s")
+                                search_params.append(cleaned_data[key])
+                            else:
+                                # If a configured key is missing from the form data, we can't match
+                                print(f"Warning: Configured duplicate key '{key}' not found in form data")
+                                raise insert_error
+
+                        if search_conditions:
+                            where_clause = ' AND '.join(search_conditions)
+                            find_sql = f"SELECT * FROM `{table_name}` WHERE {where_clause}"
+                            cursor.execute(find_sql, tuple(search_params))
+                            existing_row = cursor.fetchone()
+                            
+                            if existing_row:
+                                # Get current contributors
+                                current_contributors = existing_row.get(contributor_column, '')
+                                if current_contributors:
+                                    contributors_list = [c.strip() for c in current_contributors.split(',')]
+                                else:
+                                    contributors_list = []
+                                
+                                # Add current user if not already present
+                                if session['db_user'] not in contributors_list:
+                                    contributors_list.append(session['db_user'])
+                                    new_contributors_str = ','.join(contributors_list)
+                                    
+                                    # Update the existing row
+                                    if isinstance(primary_key_config, list):
+                                        pk_conditions = []
+                                        pk_params = []
+                                        for pk_col in primary_key_config:
+                                            pk_conditions.append(f"`{pk_col}` = %s")
+                                            pk_params.append(existing_row[pk_col])
+                                        pk_where_clause = ' AND '.join(pk_conditions)
+                                        update_sql = f"UPDATE `{table_name}` SET `{contributor_column}` = %s WHERE {pk_where_clause}"
+                                        cursor.execute(update_sql, tuple([new_contributors_str] + pk_params))
+                                        row_id_path = '/'.join(str(existing_row[pk]) for pk in primary_key_config)
+                                    else:
+                                        update_sql = f"UPDATE `{table_name}` SET `{contributor_column}` = %s WHERE `{primary_key_config}` = %s"
+                                        cursor.execute(update_sql, (new_contributors_str, existing_row[primary_key_config]))
+                                        row_id_path = str(existing_row[primary_key_config])
+                                    
+                                    connection.commit()
+                                    return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
+                                else:
+                                    # User is already a contributor, just redirect to expanded view
+                                    if isinstance(primary_key_config, list):
+                                        row_id_path = '/'.join(str(existing_row[pk]) for pk in primary_key_config)
+                                    else:
+                                        row_id_path = str(existing_row[primary_key_config])
+                                    return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
+                            else:
+                                # No matching row found with configured keys, this shouldn't happen with a duplicate error
+                                print(f"Warning: Duplicate error but no matching row found for keys: {duplicate_keys}")
+                                raise insert_error
+                        else:
+                            # No valid search conditions could be built
+                            raise insert_error
+                            
+                    except Exception as contributor_error:
+                        print(f"Error adding as contributor: {contributor_error}")
+                        # Fall through to regular error handling
+                
+                # If we get here, it's a different kind of error or table not configured for duplicate handling
+                raise insert_error
+                
     except Exception as e:
         print(f"Error adding row: {e}")
         return redirect(url_for('index', table_name=table_name, error=str(e)))
@@ -495,7 +701,7 @@ def delete_row(table_name):
         with connection.cursor() as cursor:
             primary_key_config = PRIMARY_KEYS.get(table_name)
             
-            # Add write-only filtering if applicable
+            # Check if the table is write-only and enforce owner-only deletion
             if table_name in WRITE_ONLY_CONFIG:
                 contributor_column = WRITE_ONLY_CONFIG[table_name]['contributor_column']
                 
@@ -510,11 +716,28 @@ def delete_row(table_name):
                         where_clauses.append(f"`{pk_col}` = %s")
                         values.append(row_id)
                     
-                    where_clauses.append(f"`{contributor_column}` LIKE %s")
-                    values.append(f"%{session['db_user']}%")
+                    # First, check if the row exists and get the current contributors
+                    where_clause = ' AND '.join(where_clauses)
+                    check_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause}"
+                    cursor.execute(check_sql, tuple(values))
+                    row = cursor.fetchone()
                     
-                    sql = f"DELETE FROM `{table_name}` WHERE {' AND '.join(where_clauses)}"
+                    if not row:
+                        return redirect(url_for('index', table_name=table_name, error="Row not found."))
+                    
+                    # Check if current user is the owner (first contributor)
+                    contributors = row[contributor_column]
+                    if contributors:
+                        contributors_list = [c.strip() for c in contributors.split(',')]
+                        if not contributors_list or contributors_list[0] != session['db_user']:
+                            return redirect(url_for('index', table_name=table_name, error="Only the owner can delete this row."))
+                    else:
+                        return redirect(url_for('index', table_name=table_name, error="No contributors found for this row."))
+                    
+                    # If we get here, user is the owner - proceed with deletion
+                    sql = f"DELETE FROM `{table_name}` WHERE {where_clause}"
                     cursor.execute(sql, tuple(values))
+                    
                 else:
                     # Handle single primary key
                     primary_key = primary_key_config
@@ -522,9 +745,28 @@ def delete_row(table_name):
                     if not row_id:
                         return redirect(url_for('index', table_name=table_name, error=f"Error: Missing primary key for deletion. Expected key: '{primary_key}'."))
                     
-                    sql = f"DELETE FROM `{table_name}` WHERE `{primary_key}` = %s AND `{contributor_column}` LIKE %s"
-                    cursor.execute(sql, (row_id, f"%{session['db_user']}%"))
+                    # First, check if the row exists and get the current contributors
+                    check_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE `{primary_key}` = %s"
+                    cursor.execute(check_sql, (row_id,))
+                    row = cursor.fetchone()
+                    
+                    if not row:
+                        return redirect(url_for('index', table_name=table_name, error="Row not found."))
+                    
+                    # Check if current user is the owner (first contributor)
+                    contributors = row[contributor_column]
+                    if contributors:
+                        contributors_list = [c.strip() for c in contributors.split(',')]
+                        if not contributors_list or contributors_list[0] != session['db_user']:
+                            return redirect(url_for('index', table_name=table_name, error="Only the owner can delete this row."))
+                    else:
+                        return redirect(url_for('index', table_name=table_name, error="No contributors found for this row."))
+                    
+                    # If we get here, user is the owner - proceed with deletion
+                    sql = f"DELETE FROM `{table_name}` WHERE `{primary_key}` = %s"
+                    cursor.execute(sql, (row_id,))
             else:
+                # Non-write-only tables - use original logic (no ownership restrictions)
                 if is_composite_pk(table_name):
                     # Handle composite primary key
                     where_clauses = []
@@ -564,9 +806,20 @@ def add_junction_entry(table_name):
     if 'db_user' not in session:
         return redirect(url_for('login'))
     
-    config = MANY_TO_MANY_CONFIG.get(table_name)
+    # Find the specific junction configuration
+    junction_configs = MANY_TO_MANY_CONFIG.get(table_name, [])
+    if isinstance(junction_configs, dict):
+        junction_configs = [junction_configs]
+    
+    junction_name = request.form.get('junction_name')
+    config = None
+    for jc in junction_configs:
+        if jc.get('name', jc['other_table']) == junction_name:
+            config = jc
+            break
+    
     if not config:
-        return redirect(url_for('index', table_name=table_name, error="No many-to-many config found."))
+        return redirect(url_for('index', table_name=table_name, error="Junction configuration not found."))
 
     try:
         connection = get_db_connection(session['db_user'], session['db_password'])
@@ -574,8 +827,22 @@ def add_junction_entry(table_name):
             main_id = request.form[config['fk_self']]
             other_id = request.form[config['fk_other']]
             
-            sql = f"INSERT INTO `{config['junction_table']}` (`{config['fk_self']}`, `{config['fk_other']}`) VALUES (%s, %s)"
-            cursor.execute(sql, (main_id, other_id))
+            # Collect extra column data
+            extra_data = {}
+            for col in config.get('extra_columns', []):
+                value = request.form.get(f"extra_{col}")
+                if value:
+                    extra_data[col] = value
+            
+            # Build insert statement
+            all_columns = [config['fk_self'], config['fk_other']] + list(extra_data.keys())
+            all_values = [main_id, other_id] + list(extra_data.values())
+            
+            cols = ', '.join(f'`{col}`' for col in all_columns)
+            placeholders = ', '.join(['%s'] * len(all_values))
+            
+            sql = f"INSERT INTO `{config['junction_table']}` ({cols}) VALUES ({placeholders})"
+            cursor.execute(sql, tuple(all_values))
         connection.commit()
     except Exception as e:
         print(f"Error adding junction entry: {e}")
@@ -586,28 +853,122 @@ def add_junction_entry(table_name):
     
     return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id))
 
-
 @app.route('/<string:table_name>/remove_junction_entry', methods=['POST'])
 def remove_junction_entry(table_name):
     connection = None
     if 'db_user' not in session:
         return redirect(url_for('login'))
     
-    config = MANY_TO_MANY_CONFIG.get(table_name)
+    # Find the specific junction configuration
+    junction_configs = MANY_TO_MANY_CONFIG.get(table_name, [])
+    if isinstance(junction_configs, dict):
+        junction_configs = [junction_configs]
+    
+    junction_name = request.form.get('junction_name')
+    config = None
+    for jc in junction_configs:
+        if jc.get('name', jc['other_table']) == junction_name:
+            config = jc
+            break
+    
     if not config:
-        return redirect(url_for('index', table_name=table_name, error="No many-to-many config found."))
+        return redirect(url_for('index', table_name=table_name, error="Junction configuration not found."))
 
     try:
         connection = get_db_connection(session['db_user'], session['db_password'])
         with connection.cursor() as cursor:
             main_id = request.form[config['fk_self']]
-            other_id = request.form[config['fk_other']]
-
-            sql = f"DELETE FROM `{config['junction_table']}` WHERE `{config['fk_self']}` = %s AND `{config['fk_other']}` = %s"
-            cursor.execute(sql, (main_id, other_id))
+            
+            # Handle deletion by junction primary key if available
+            junction_pk = config.get('junction_primary_key', [config['fk_self'], config['fk_other']])
+            
+            where_clauses = []
+            where_values = []
+            
+            for pk_col in junction_pk:
+                value = request.form.get(pk_col)
+                if value:
+                    where_clauses.append(f"`{pk_col}` = %s")
+                    where_values.append(value)
+            
+            if where_clauses:
+                where_clause = ' AND '.join(where_clauses)
+                sql = f"DELETE FROM `{config['junction_table']}` WHERE {where_clause}"
+                cursor.execute(sql, tuple(where_values))
+            else:
+                # Fallback to old method
+                other_id = request.form[config['fk_other']]
+                sql = f"DELETE FROM `{config['junction_table']}` WHERE `{config['fk_self']}` = %s AND `{config['fk_other']}` = %s"
+                cursor.execute(sql, (main_id, other_id))
+                
         connection.commit()
     except Exception as e:
         print(f"Error removing junction entry: {e}")
+        return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
+    finally:
+        if connection:
+            connection.close()
+    
+    return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id))
+
+@app.route('/<string:table_name>/update_junction_entry', methods=['POST'])
+def update_junction_entry(table_name):
+    connection = None
+    if 'db_user' not in session:
+        return redirect(url_for('login'))
+    
+    # Find the specific junction configuration
+    junction_configs = MANY_TO_MANY_CONFIG.get(table_name, [])
+    if isinstance(junction_configs, dict):
+        junction_configs = [junction_configs]
+    
+    junction_name = request.form.get('junction_name')
+    config = None
+    for jc in junction_configs:
+        if jc.get('name', jc['other_table']) == junction_name:
+            config = jc
+            break
+    
+    if not config:
+        return redirect(url_for('index', table_name=table_name, error="Junction configuration not found."))
+
+    try:
+        connection = get_db_connection(session['db_user'], session['db_password'])
+        with connection.cursor() as cursor:
+            main_id = request.form[config['fk_self']]
+            
+            # Get the junction primary key values for WHERE clause
+            junction_pk = config.get('junction_primary_key', [config['fk_self'], config['fk_other']])
+            
+            where_clauses = []
+            where_values = []
+            
+            for pk_col in junction_pk:
+                value = request.form.get(f"original_{pk_col}")  # Use original values for WHERE
+                if value:
+                    where_clauses.append(f"`{pk_col}` = %s")
+                    where_values.append(value)
+            
+            # Collect extra column updates
+            update_data = {}
+            for col in config.get('extra_columns', []):
+                value = request.form.get(f"extra_{col}")
+                if value is not None:  # Allow empty strings
+                    update_data[col] = value
+            
+            if update_data and where_clauses:
+                set_clauses = [f"`{col}` = %s" for col in update_data.keys()]
+                set_clause = ', '.join(set_clauses)
+                where_clause = ' AND '.join(where_clauses)
+                
+                update_values = list(update_data.values()) + where_values
+                
+                sql = f"UPDATE `{config['junction_table']}` SET {set_clause} WHERE {where_clause}"
+                cursor.execute(sql, tuple(update_values))
+                
+        connection.commit()
+    except Exception as e:
+        print(f"Error updating junction entry: {e}")
         return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
     finally:
         if connection:
@@ -643,13 +1004,13 @@ def add_contributor(table_name):
                 where_clause = ' AND '.join(where_clauses)
                 pk_params = [pk_values[col] for col in primary_key_config]
                 
-                # First, get the current contributors
-                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause} AND `{contributor_column}` = %s"
-                cursor.execute(select_sql, tuple(pk_params + [session['db_user']]))
+                # First, get the current contributors - REMOVE the contributor filter here
+                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause}"
+                cursor.execute(select_sql, tuple(pk_params))
                 current_row = cursor.fetchone()
                 
                 if not current_row:
-                    return redirect(url_for('index', table_name=table_name, error="Row not found or you don't have permission to modify it."))
+                    return redirect(url_for('index', table_name=table_name, error="Row not found."))
                 
                 row_id_path = '/'.join(str(pk_values[col]) for col in primary_key_config)
             else:
@@ -657,13 +1018,13 @@ def add_contributor(table_name):
                 where_clause = f"`{primary_key_config}` = %s"
                 pk_params = [pk_value]
                 
-                # First, get the current contributors
-                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause} AND `{contributor_column}` = %s"
-                cursor.execute(select_sql, tuple(pk_params + [session['db_user']]))
+                # First, get the current contributors - REMOVE the contributor filter here
+                select_sql = f"SELECT `{contributor_column}` FROM `{table_name}` WHERE {where_clause}"
+                cursor.execute(select_sql, tuple(pk_params))
                 current_row = cursor.fetchone()
                 
                 if not current_row:
-                    return redirect(url_for('expanded_view', table_name=table_name, row_id=pk_value, error="Row not found or you don't have permission to modify it."))
+                    return redirect(url_for('expanded_view', table_name=table_name, row_id=pk_value, error="Row not found."))
                 
                 row_id_path = pk_value
 
@@ -674,14 +1035,18 @@ def add_contributor(table_name):
             else:
                 contributors_list = []
             
+            # Check if current user is the first contributor (owner)
+            if not contributors_list or contributors_list[0] != session['db_user']:
+                return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="Only the owner can add contributors."))
+            
             # Add new contributor if not already present
             if new_contributor not in contributors_list:
                 contributors_list.append(new_contributor)
                 new_contributors_str = ','.join(contributors_list)
                 
-                # Update the row
-                update_sql = f"UPDATE `{table_name}` SET `{contributor_column}` = %s WHERE {where_clause} AND `{contributor_column}` = %s"
-                cursor.execute(update_sql, tuple([new_contributors_str] + pk_params + [current_contributors]))
+                # Update the row - REMOVE the contributor filter here too
+                update_sql = f"UPDATE `{table_name}` SET `{contributor_column}` = %s WHERE {where_clause}"
+                cursor.execute(update_sql, tuple([new_contributors_str] + pk_params))
                 connection.commit()
             else:
                 return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path, error="Contributor already has access to this row."))
@@ -694,7 +1059,6 @@ def add_contributor(table_name):
             connection.close()
 
     return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
-
 
 @app.route('/<string:table_name>/share_row', methods=['POST'])
 def share_row(table_name):

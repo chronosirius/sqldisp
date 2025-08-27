@@ -1,143 +1,4 @@
-});
-        }
-        </script>
-        
-        <script>
-        // Foreign Key Search functionality
-        let fkSearchTimeouts = {};
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            // Initialize foreign key search inputs
-            document.querySelectorAll('.fk-search-input').forEach(input => {
-                const targetInput = document.getElementById(input.dataset.targetInput);
-                const selectedDisplay = input.parentElement.querySelector('.fk-selected-display');
-                
-                // Load current selection if exists
-                if (targetInput.value) {
-                    loadForeignKeyDisplay(input, targetInput.value);
-                }
-                
-                input.addEventListener('input', function() {
-                    handleForeignKeySearch(this);
-                });
-                
-                input.addEventListener('focus', function() {
-                    if (this.value.length >= 1) {
-                        handleForeignKeySearch(this);
-                    }
-                });
-                
-                input.addEventListener('blur', function() {
-                    // Delay hiding results to allow clicks
-                    setTimeout(() => {
-                        const results = this.parentElement.querySelector('.fk-search-results');
-                        results.style.display = 'none';
-                    }, 200);
-                });
-            });
-        });
-        
-        function handleForeignKeySearch(input) {
-            const query = input.value.trim();
-            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
-            const inputId = input.dataset.targetInput;
-            
-            // Clear previous timeout
-            if (fkSearchTimeouts[inputId]) {
-                clearTimeout(fkSearchTimeouts[inputId]);
-            }
-            
-            if (query.length < 1) {
-                resultsDiv.style.display = 'none';
-                return;
-            }
-            
-            // Debounce the search
-            fkSearchTimeouts[inputId] = setTimeout(() => {
-                searchForeignKey(input, query);
-            }, 300);
-        }
-        
-        async function searchForeignKey(input, query) {
-            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
-            const table = input.dataset.table;
-            const searchColumns = input.dataset.searchColumns;
-            
-            try {
-                resultsDiv.innerHTML = '<div class="fk-search-result">Searching...</div>';
-                resultsDiv.style.display = 'block';
-                
-                const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
-                const data = await response.json();
-                
-                if (data.results && data.results.length > 0) {
-                    resultsDiv.innerHTML = '';
-                    data.results.forEach(result => {
-                        const resultDiv = document.createElement('div');
-                        resultDiv.className = 'fk-search-result';
-                        resultDiv.innerHTML = result.display;
-                        resultDiv.onclick = () => selectForeignKey(input, result.id, result.display);
-                        resultsDiv.appendChild(resultDiv);
-                    });
-                } else {
-                    resultsDiv.innerHTML = '<div class="fk-search-result">No results found</div>';
-                }
-            } catch (error) {
-                console.error('Search error:', error);
-                resultsDiv.innerHTML = '<div class="fk-search-result">Search failed</div>';
-            }
-        }
-        
-        function selectForeignKey(searchInput, id, display) {
-            const targetInput = document.getElementById(searchInput.dataset.targetInput);
-            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
-            const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
-            
-            // Set the ID in the hidden input
-            targetInput.value = id;
-            
-            // Update the display
-            selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
-            selectedDisplay.style.display = 'block';
-            
-            // Hide search input and results
-            searchInput.style.display = 'none';
-            resultsDiv.style.display = 'none';
-        }
-        
-        function showForeignKeySearch(displayElement) {
-            const container = displayElement.parentElement;
-            const searchInput = container.querySelector('.fk-search-input');
-            
-            // Show search input and focus it
-            searchInput.style.display = 'block';
-            searchInput.focus();
-            searchInput.select();
-            
-            // Hide display element temporarily
-            displayElement.style.display = 'none';
-        }
-        
-        async function loadForeignKeyDisplay(searchInput, id) {
-            const table = searchInput.dataset.table;
-            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
-            
-            if (!id) return;
-            
-            try {
-                const response = await fetch(`/get_foreign_key_display/${table}/${id}`);
-                const data = await response.json();
-                
-                if (data.success) {
-                    selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
-                    selectedDisplay.style.display = 'block';
-                    searchInput.style.display = 'none';
-                }
-            } catch (error) {
-                console.error('Error loading FK display:', error);
-            }
-        }
-        </script><!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -286,6 +147,11 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
+        .form-container .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
         .form-container button {
             padding: 8px 15px;
             background-color: #28a745;
@@ -357,6 +223,19 @@
         }
         .fk-selected-display:hover {
             background-color: #d4edda;
+        }
+        .fk-cell-display {
+            background-color: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #495057;
+            border: 1px solid #dee2e6;
+            margin-top: 4px;
+        }
+        .fk-id-display {
+            font-weight: bold;
+            color: #007bff;
         }
     </style>
 </head>
@@ -452,7 +331,25 @@
                     {% for row in data %}
                     <tr class="clickable-row" onclick="redirectToExpandedView('{{ table_name }}', {% if primary_key is string %}'{{ row[primary_key] }}'{% else %}[{% for pk_col in primary_key %}'{{ row[pk_col] }}'{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %})">
                         {% for col in columns %}
-                        <td class="col-{{ col }}">{{ row[col] }}</td>
+                        <td class="col-{{ col }}">
+                            <div>
+                                <span class="fk-id-display">{{ row[col] }}</span>
+                                {% if schema[col].get('is_foreign_key') and row[col] is not none %}
+                                    {% if primary_key is string %}
+                                        {% set row_id = row[primary_key] | string %}
+                                    {% else %}
+                                        {% set row_id_parts = [] %}
+                                        {% for pk in primary_key %}
+                                            {% if row_id_parts.append(row[pk] | string) %}{% endif %}
+                                        {% endfor %}
+                                        {% set row_id = row_id_parts | join('/') %}
+                                    {% endif %}
+                                    {% if fk_display_data.get(row_id, {}).get(col) %}
+                                        <div class="fk-cell-display">{{ fk_display_data[row_id][col] }}</div>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        </td>
                         {% endfor %}
                         <td class="actions" onclick="event.stopPropagation();">
                             <button class="expand-btn" onclick="redirectToExpandedView('{{ table_name }}', {% if primary_key is string %}'{{ row[primary_key] }}'{% else %}[{% for pk_col in primary_key %}'{{ row[pk_col] }}'{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %})">Expand</button>
@@ -573,6 +470,167 @@
             rows.forEach(row => {
                 tbody.appendChild(row);
             });
+        }
+
+        // Foreign Key Search functionality
+        let fkSearchTimeouts = {};
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize foreign key search inputs
+            document.querySelectorAll('.fk-search-input').forEach(input => {
+                const targetInput = document.getElementById(input.dataset.targetInput);
+                const selectedDisplay = input.parentElement.querySelector('.fk-selected-display');
+                
+                // Load current selection if exists
+                if (targetInput.value) {
+                    loadForeignKeyDisplay(input, targetInput.value);
+                }
+                
+                input.addEventListener('input', function() {
+                    handleForeignKeySearch(this);
+                });
+                
+                input.addEventListener('focus', function() {
+                    if (this.value.length >= 1) {
+                        handleForeignKeySearch(this);
+                    }
+                });
+                
+                input.addEventListener('blur', function() {
+                    // Delay hiding results to allow clicks
+                    setTimeout(() => {
+                        const results = this.parentElement.querySelector('.fk-search-results');
+                        results.style.display = 'none';
+                    }, 200);
+                });
+            });
+
+            // Add change listeners to FK input fields to update display
+            document.querySelectorAll('input[type="text"], input[type="number"]').forEach(input => {
+                // Check if this input has a corresponding FK search
+                const fkSearch = document.querySelector(`[data-target-input="${input.id}"]`);
+                if (fkSearch) {
+                    input.addEventListener('change', function() {
+                        if (this.value) {
+                            loadForeignKeyDisplay(fkSearch, this.value);
+                        } else {
+                            const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                            selectedDisplay.style.display = 'none';
+                            fkSearch.style.display = 'block';
+                        }
+                    });
+                    
+                    input.addEventListener('input', function() {
+                        // Clear the display when manually typing
+                        const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                        if (selectedDisplay.style.display === 'block') {
+                            selectedDisplay.style.display = 'none';
+                            fkSearch.style.display = 'block';
+                        }
+                    });
+                }
+            });
+        });
+        
+        function handleForeignKeySearch(input) {
+            const query = input.value.trim();
+            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+            const inputId = input.dataset.targetInput;
+            
+            // Clear previous timeout
+            if (fkSearchTimeouts[inputId]) {
+                clearTimeout(fkSearchTimeouts[inputId]);
+            }
+            
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+            
+            // Debounce the search
+            fkSearchTimeouts[inputId] = setTimeout(() => {
+                searchForeignKey(input, query);
+            }, 300);
+        }
+        
+        async function searchForeignKey(input, query) {
+            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+            const table = input.dataset.table;
+            const searchColumns = input.dataset.searchColumns;
+            
+            try {
+                resultsDiv.innerHTML = '<div class="fk-search-result">Searching...</div>';
+                resultsDiv.style.display = 'block';
+                
+                const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    resultsDiv.innerHTML = '';
+                    data.results.forEach(result => {
+                        const resultDiv = document.createElement('div');
+                        resultDiv.className = 'fk-search-result';
+                        resultDiv.innerHTML = result.display;
+                        resultDiv.onclick = () => selectForeignKey(input, result.id, result.display);
+                        resultsDiv.appendChild(resultDiv);
+                    });
+                } else {
+                    resultsDiv.innerHTML = '<div class="fk-search-result">No results found</div>';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsDiv.innerHTML = '<div class="fk-search-result">Search failed</div>';
+            }
+        }
+        
+        function selectForeignKey(searchInput, id, display) {
+            const targetInput = document.getElementById(searchInput.dataset.targetInput);
+            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+            const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
+            
+            // Set the ID in the hidden input
+            targetInput.value = id;
+            
+            // Update the display
+            selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
+            selectedDisplay.style.display = 'block';
+            
+            // Hide search input and results
+            searchInput.style.display = 'none';
+            resultsDiv.style.display = 'none';
+        }
+        
+        function showForeignKeySearch(displayElement) {
+            const container = displayElement.parentElement;
+            const searchInput = container.querySelector('.fk-search-input');
+            
+            // Show search input and focus it
+            searchInput.style.display = 'block';
+            searchInput.focus();
+            searchInput.select();
+            
+            // Hide display element temporarily
+            displayElement.style.display = 'none';
+        }
+        
+        async function loadForeignKeyDisplay(searchInput, id) {
+            const table = searchInput.dataset.table;
+            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+            
+            if (!id) return;
+            
+            try {
+                const response = await fetch(`/get_foreign_key_display/${table}/${id}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
+                    selectedDisplay.style.display = 'block';
+                    searchInput.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading FK display:', error);
+            }
         }
     </script>
 </body>

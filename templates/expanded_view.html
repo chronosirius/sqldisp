@@ -118,12 +118,66 @@
             border-radius: 8px;
             background-color: #f9f9f9;
         }
-        .related-list {
-            list-style-type: none;
-            padding: 0;
+        .junction-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .junction-table th,
+        .junction-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .junction-table th {
+            background-color: #f5f5f5;
+            font-weight: bold;
+        }
+        .junction-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .junction-form {
+            background-color: #fff;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 15px;
+        }
+        .junction-form h4 {
+            margin-top: 0;
+            color: #333;
+        }
+        .junction-form .form-row {
             display: flex;
-            flex-wrap: wrap;
             gap: 10px;
+            margin-bottom: 10px;
+            align-items: flex-end;
+        }
+        .junction-form .form-group {
+            flex: 1;
+        }
+        .junction-form .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .junction-form .form-group input,
+        .junction-form .form-group select {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .junction-form button {
+            padding: 6px 12px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
         }
         .related-item {
             display: flex;
@@ -131,6 +185,7 @@
             background-color: #eee;
             padding: 8px;
             border-radius: 4px;
+            margin: 5px 0;
         }
         .related-item button {
             background-color: #dc3545;
@@ -139,6 +194,15 @@
             border-radius: 4px;
             cursor: pointer;
             margin-left: 10px;
+            padding: 4px 8px;
+        }
+        .related-link {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .related-link:hover {
+            text-decoration: underline;
         }
         .contributor-section {
             margin-top: 30px;
@@ -227,6 +291,37 @@
         }
         .fk-selected-display:hover {
             background-color: #d4edda;
+        }
+        .action-btn {
+            padding: 4px 8px;
+            margin: 2px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            color: white;
+            font-size: 11px;
+        }
+        .edit-btn { background-color: #007bff; }
+        .delete-btn { background-color: #dc3545; }
+        .save-btn { background-color: #28a745; }
+        .cancel-btn { background-color: #6c757d; }
+        .editable-row { background-color: #fff3cd; }
+        .junction-verification {
+            position: relative;
+        }
+        .verification-status {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            pointer-events: none;
+        }
+        .verification-info {
+            margin-top: 5px;
+            font-size: 12px;
+            color: #666;
+            min-height: 18px;
         }
     </style>
 </head>
@@ -377,265 +472,485 @@
             </div>
             {% endif %}
 
-            {% if many_to_many_config %}
+            {% for junction_data in all_junction_data %}
             <div class="related-section">
-                <h2>Related {{ many_to_many_config['other_table'] | capitalize }}</h2>
+                <h2>{{ junction_data.relationship_name | capitalize }}</h2>
 
-                <ul class="related-list">
-                    {% for item in related_data %}
-                    <li class="related-item">
-                        <span>{{ item[many_to_many_config['other_display_column']] }}</span>
+                {% if junction_data.config.get('show_multiple_rows', False) %}
+                    <!-- Show full junction table with extra columns -->
+                    {% if junction_data.rows %}
+                    <table class="junction-table">
+                        <thead>
+                            <tr>
+                                {% set config = junction_data.config %}
+                                <th>{{ config.other_display_column | capitalize }}</th>
+                                {% for col in config.get('extra_columns', []) %}
+                                <th>{{ col | capitalize }}</th>
+                                {% endfor %}
+                                {% if config.other_table == table_name %}
+                                <th>Details</th>
+                                {% endif %}
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in junction_data.rows %}
+                            <tr id="junction-row-{{ loop.index }}">
+                                <td>
+                                    {% if config.other_table == table_name %}
+                                        <a href="{{ url_for('expanded_view', table_name=config.other_table, row_id=row.other_pk) }}" class="related-link">
+                                            {{ row.other_display }}
+                                        </a>
+                                    {% else %}
+                                        {{ row.other_display }}
+                                    {% endif %}
+                                </td>
+                                {% for col in config.get('extra_columns', []) %}
+                                <td>
+                                    <span class="display-value">{{ row[col] if row[col] is not none else '' }}</span>
+                                    <input type="text" class="edit-value" style="display: none; width: 100%;" value="{{ row[col] if row[col] is not none else '' }}">
+                                </td>
+                                {% endfor %}
+                                {% if config.other_table == table_name %}
+                                <td style="font-size: 12px; color: #666;">
+                                    {% for key, value in row.items() %}
+                                        {% if key.startswith('other_') and key != 'other_pk' %}
+                                            {{ key.replace('other_', '') }}: {{ value }}<br>
+                                        {% endif %}
+                                    {% endfor %}
+                                </td>
+                                {% endif %}
+                                <td>
+                                    <button class="action-btn edit-btn" onclick="editJunctionRow({{ loop.index }}, '{{ junction_data.relationship_name }}')">Edit</button>
+                                    <button class="action-btn save-btn" style="display: none;" onclick="saveJunctionRow({{ loop.index }}, '{{ junction_data.relationship_name }}')">Save</button>
+                                    <button class="action-btn cancel-btn" style="display: none;" onclick="cancelJunctionEdit({{ loop.index }})">Cancel</button>
+                                    
+                                    <form action="{{ url_for('remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
+                                        <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
+                                        {% if primary_key is string %}
+                                            <input type="hidden" name="{{ config.fk_self }}" value="{{ row_data[primary_key] }}">
+                                        {% else %}
+                                            <input type="hidden" name="{{ config.fk_self }}" value="{{ row_data[primary_key[0]] }}">
+                                        {% endif %}
+                                        {% for pk_col in config.get('junction_primary_key', [config.fk_self, config.fk_other]) %}
+                                        <input type="hidden" name="{{ pk_col }}" value="{{ row[pk_col] }}">
+                                        {% endfor %}
+                                        <button class="action-btn delete-btn" type="submit" onclick="return confirm('Remove this relationship?')">Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p>No relationships found.</p>
+                    {% endif %}
+                {% else %}
+                    <!-- Original simple list view -->
+                    {% for item in junction_data.rows %}
+                    <div class="related-item">
+                        <span>{{ item[junction_data.config.other_display_column] }}</span>
                         <form action="{{ url_for('remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
+                            <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
                             {% if primary_key is string %}
-                                <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] }}">
+                                <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
                             {% else %}
-                                <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key[0]] }}">
+                                <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key[0]] }}">
                             {% endif %}
-                            <!-- Use the primary key of the other table, which should be the first value -->
-                            <input type="hidden" name="{{ many_to_many_config['fk_other'] }}" value="{{ item.values() | list | first }}">
+                            <input type="hidden" name="{{ junction_data.config.fk_other }}" value="{{ item.values() | list | first }}">
                             <button type="submit" onclick="return confirm('Remove this relationship?')">Remove</button>
                         </form>
-                    </li>
-                    {% endfor %}
-                </ul>
-
-                <hr style="margin: 20px 0;">
-
-                <h3>Add a New {{ many_to_many_config['other_table'] | capitalize }}</h3>
-                <form action="{{ url_for('add_junction_entry', table_name=table_name) }}" method="post" style="display: flex; gap: 10px; align-items: flex-start; max-width: 600px;">
-                    {% if primary_key is string %}
-                        <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key] }}">
-                    {% else %}
-                        <input type="hidden" name="{{ many_to_many_config['fk_self'] }}" value="{{ row_data[primary_key[0]] }}">
-                    {% endif %}
-                    <div style="flex-grow: 1; min-width: 200px;">
-                        <div style="position: relative;">
-                            <input type="text" 
-                                   name="{{ many_to_many_config['fk_other'] }}" 
-                                   id="junction-id-input"
-                                   placeholder="Enter {{ many_to_many_config['other_table'] }} ID" 
-                                   required
-                                   style="width: 100%; padding: 8px 35px 8px 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
-                            <div id="verification-status" 
-                                 style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 16px; pointer-events: none;"></div>
-                        </div>
-                        <div id="verification-info" 
-                             style="margin-top: 5px; font-size: 12px; color: #666; min-height: 18px;"></div>
                     </div>
-                    <button type="submit" 
-                            id="add-junction-btn" 
-                            disabled
-                            style="padding: 8px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; align-self: flex-start;">
-                        Add
-                    </button>
-                </form>
-                
-                <script>
-                let verificationTimeout;
-                const input = document.getElementById('junction-id-input');
-                const statusDiv = document.getElementById('verification-status');
-                const infoDiv = document.getElementById('verification-info');
-                const addButton = document.getElementById('add-junction-btn');
-                
-                // Get the main record ID
-                const mainId = {% if primary_key is string %}'{{ row_data[primary_key] }}'{% else %}'{{ row_data[primary_key[0]] }}'{% endif %};
-                
-                input.addEventListener('input', function() {
-                    const value = this.value.trim();
-                    
-                    // Clear previous timeout
-                    clearTimeout(verificationTimeout);
-                    
-                    if (value === '') {
-                        statusDiv.innerHTML = '';
-                        infoDiv.innerHTML = '';
-                        addButton.disabled = true;
-                        return;
-                    }
-                    
-                    // Show loading state
-                    statusDiv.innerHTML = '<span style="color: #ffc107;">⏳</span>';
-                    infoDiv.innerHTML = 'Verifying...';
-                    addButton.disabled = true;
-                    
-                    // Debounce the verification
-                    verificationTimeout = setTimeout(() => {
-                        verifyJunctionId(value);
-                    }, 500);
-                });
-                
-                async function verifyJunctionId(id) {
-                    try {
-                        const response = await fetch(`/verify_junction_id/{{ table_name }}/${mainId}/${id}`, {
-                            method: 'GET',
-                        });
+                    {% endfor %}
+                {% endif %}
+
+                <div class="junction-form">
+                    <h4>Add New {{ junction_data.relationship_name | capitalize }}</h4>
+                    <form action="{{ url_for('add_junction_entry', table_name=table_name) }}" method="post">
+                        <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
+                        {% if primary_key is string %}
+                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
+                        {% else %}
+                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key[0]] }}">
+                        {% endif %}
                         
-                        const data = await response.json();
-                        
-                        if (data.exists) {
-                            if (data.already_linked) {
-                                statusDiv.innerHTML = '<span style="color: #ffc107;">⚠️</span>';
-                                infoDiv.innerHTML = `Already linked to: ${data.display_name}`;
-                                addButton.disabled = true;
-                            } else {
-                                statusDiv.innerHTML = '<span style="color: #28a745;">✓</span>';
-                                infoDiv.innerHTML = `Found: ${data.display_name}`;
-                                addButton.disabled = false;
-                            }
-                        } else {
-                            statusDiv.innerHTML = '<span style="color: #dc3545;">✗</span>';
-                            infoDiv.innerHTML = 'ID not found';
-                            addButton.disabled = true;
-                        }
-                    } catch (error) {
-                        console.error('Verification error:', error);
-                        statusDiv.innerHTML = '<span style="color: #dc3545;">⚠️</span>';
-                        infoDiv.innerHTML = 'Verification failed';
-                        addButton.disabled = true;
-                    }
-                }
-                </script>
-                
-                <script>
-                // Foreign Key Search functionality
-                let fkSearchTimeouts = {};
-                
-                document.addEventListener('DOMContentLoaded', function() {
-                    // Initialize foreign key search inputs
-                    document.querySelectorAll('.fk-search-input').forEach(input => {
-                        const targetInput = document.getElementById(input.dataset.targetInput);
-                        const selectedDisplay = input.parentElement.querySelector('.fk-selected-display');
-                        
-                        // Load current selection if exists
-                        if (targetInput.value) {
-                            loadForeignKeyDisplay(input, targetInput.value);
-                        }
-                        
-                        input.addEventListener('input', function() {
-                            handleForeignKeySearch(this);
-                        });
-                        
-                        input.addEventListener('focus', function() {
-                            if (this.value.length >= 1) {
-                                handleForeignKeySearch(this);
-                            }
-                        });
-                        
-                        input.addEventListener('blur', function() {
-                            // Delay hiding results to allow clicks
-                            setTimeout(() => {
-                                const results = this.parentElement.querySelector('.fk-search-results');
-                                results.style.display = 'none';
-                            }, 200);
-                        });
-                    });
-                });
-                
-                function handleForeignKeySearch(input) {
-                    const query = input.value.trim();
-                    const resultsDiv = input.parentElement.querySelector('.fk-search-results');
-                    const inputId = input.dataset.targetInput;
-                    
-                    // Clear previous timeout
-                    if (fkSearchTimeouts[inputId]) {
-                        clearTimeout(fkSearchTimeouts[inputId]);
-                    }
-                    
-                    if (query.length < 1) {
-                        resultsDiv.style.display = 'none';
-                        return;
-                    }
-                    
-                    // Debounce the search
-                    fkSearchTimeouts[inputId] = setTimeout(() => {
-                        searchForeignKey(input, query);
-                    }, 300);
-                }
-                
-                async function searchForeignKey(input, query) {
-                    const resultsDiv = input.parentElement.querySelector('.fk-search-results');
-                    const table = input.dataset.table;
-                    const searchColumns = input.dataset.searchColumns;
-                    
-                    try {
-                        resultsDiv.innerHTML = '<div class="fk-search-result">Searching...</div>';
-                        resultsDiv.style.display = 'block';
-                        
-                        const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
-                        const data = await response.json();
-                        
-                        if (data.results && data.results.length > 0) {
-                            resultsDiv.innerHTML = '';
-                            data.results.forEach(result => {
-                                const resultDiv = document.createElement('div');
-                                resultDiv.className = 'fk-search-result';
-                                resultDiv.innerHTML = result.display;
-                                resultDiv.onclick = () => selectForeignKey(input, result.id, result.display);
-                                resultsDiv.appendChild(resultDiv);
-                            });
-                        } else {
-                            resultsDiv.innerHTML = '<div class="fk-search-result">No results found</div>';
-                        }
-                    } catch (error) {
-                        console.error('Search error:', error);
-                        resultsDiv.innerHTML = '<div class="fk-search-result">Search failed</div>';
-                    }
-                }
-                
-                function selectForeignKey(searchInput, id, display) {
-                    const targetInput = document.getElementById(searchInput.dataset.targetInput);
-                    const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
-                    const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
-                    
-                    // Set the ID in the hidden input
-                    targetInput.value = id;
-                    
-                    // Update the display
-                    selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
-                    selectedDisplay.style.display = 'block';
-                    
-                    // Hide search input and results
-                    searchInput.style.display = 'none';
-                    resultsDiv.style.display = 'none';
-                }
-                
-                function showForeignKeySearch(displayElement) {
-                    const container = displayElement.parentElement;
-                    const searchInput = container.querySelector('.fk-search-input');
-                    
-                    // Show search input and focus it
-                    searchInput.style.display = 'block';
-                    searchInput.focus();
-                    searchInput.select();
-                    
-                    // Hide display element temporarily
-                    displayElement.style.display = 'none';
-                }
-                
-                async function loadForeignKeyDisplay(searchInput, id) {
-                    const table = searchInput.dataset.table;
-                    const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
-                    
-                    if (!id) return;
-                    
-                    try {
-                        const response = await fetch(`/get_foreign_key_display/${table}/${id}`);
-                        const data = await response.json();
-                        
-                        if (data.success) {
-                            selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
-                            selectedDisplay.style.display = 'block';
-                            searchInput.style.display = 'none';
-                        }
-                    } catch (error) {
-                        console.error('Error loading FK display:', error);
-                    }
-                }
-                </script>
+                        <div class="form-row">
+                            <div class="form-group junction-verification">
+                                <label for="junction-{{ junction_data.relationship_name }}-id">{{ junction_data.config.other_table | capitalize }} ID:</label>
+                                <input type="text" 
+                                       name="{{ junction_data.config.fk_other }}" 
+                                       id="junction-{{ junction_data.relationship_name }}-id"
+                                       placeholder="Enter {{ junction_data.config.other_table }} ID" 
+                                       required
+                                       data-junction-name="{{ junction_data.relationship_name }}"
+                                       data-main-id="{% if primary_key is string %}{{ row_data[primary_key] }}{% else %}{{ row_data[primary_key[0]] }}{% endif %}"
+                                       style="padding-right: 35px;">
+                                <div class="verification-status"></div>
+                                <div class="verification-info"></div>
+                            </div>
+                            
+                            {% for col in junction_data.config.get('extra_columns', []) %}
+                            <div class="form-group">
+                                <label for="extra-{{ junction_data.relationship_name }}-{{ col }}">{{ col | capitalize }}:</label>
+                                {% if junction_data.junction_schema[col]['is_enum'] %}
+                                <select name="extra_{{ col }}" id="extra-{{ junction_data.relationship_name }}-{{ col }}">
+                                    <option value="">-- Select {{ col }} --</option>
+                                    {% for value in junction_data.junction_schema[col]['enum_values'] %}
+                                    <option value="{{ value }}">{{ value }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <input type="{{ junction_data.junction_schema[col]['html_input_type'] }}" 
+                                       name="extra_{{ col }}" 
+                                       id="extra-{{ junction_data.relationship_name }}-{{ col }}"
+                                       placeholder="{{ col | capitalize }}">
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                            
+                            <button type="submit" 
+                                    id="add-junction-{{ junction_data.relationship_name }}-btn" 
+                                    disabled>
+                                Add {{ junction_data.relationship_name | capitalize }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
-            {% endif %}
+            {% endfor %}
 
         </div>
     </div>
+
+    <script>
+        // Foreign Key Search functionality
+        let fkSearchTimeouts = {};
+        let junctionVerificationTimeouts = {};
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize foreign key search inputs
+            document.querySelectorAll('.fk-search-input').forEach(input => {
+                const targetInput = document.getElementById(input.dataset.targetInput);
+                const selectedDisplay = input.parentElement.querySelector('.fk-selected-display');
+                
+                // Load current selection if exists
+                if (targetInput.value) {
+                    loadForeignKeyDisplay(input, targetInput.value);
+                }
+                
+                input.addEventListener('input', function() {
+                    handleForeignKeySearch(this);
+                });
+                
+                input.addEventListener('focus', function() {
+                    if (this.value.length >= 1) {
+                        handleForeignKeySearch(this);
+                    }
+                });
+                
+                input.addEventListener('blur', function() {
+                    // Delay hiding results to allow clicks
+                    setTimeout(() => {
+                        const results = this.parentElement.querySelector('.fk-search-results');
+                        results.style.display = 'none';
+                    }, 200);
+                });
+            });
+
+            // Add change listeners to FK input fields to update display
+            document.querySelectorAll('input[type="text"], input[type="number"]').forEach(input => {
+                // Check if this input has a corresponding FK search
+                const fkSearch = document.querySelector(`[data-target-input="${input.id}"]`);
+                if (fkSearch) {
+                    input.addEventListener('change', function() {
+                        if (this.value) {
+                            loadForeignKeyDisplay(fkSearch, this.value);
+                        } else {
+                            const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                            selectedDisplay.style.display = 'none';
+                            fkSearch.style.display = 'block';
+                        }
+                    });
+                    
+                    input.addEventListener('input', function() {
+                        // Clear the display when manually typing
+                        const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                        if (selectedDisplay.style.display === 'block') {
+                            selectedDisplay.style.display = 'none';
+                            fkSearch.style.display = 'block';
+                        }
+                    });
+                }
+            });
+
+            // Initialize junction table verification
+            document.querySelectorAll('[data-junction-name]').forEach(input => {
+                input.addEventListener('input', function() {
+                    handleJunctionVerification(this);
+                });
+            });
+        });
+        
+        function handleForeignKeySearch(input) {
+            const query = input.value.trim();
+            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+            const inputId = input.dataset.targetInput;
+            
+            // Clear previous timeout
+            if (fkSearchTimeouts[inputId]) {
+                clearTimeout(fkSearchTimeouts[inputId]);
+            }
+            
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+            
+            // Debounce the search
+            fkSearchTimeouts[inputId] = setTimeout(() => {
+                searchForeignKey(input, query);
+            }, 300);
+        }
+        
+        async function searchForeignKey(input, query) {
+            const resultsDiv = input.parentElement.querySelector('.fk-search-results');
+            const table = input.dataset.table;
+            const searchColumns = input.dataset.searchColumns;
+            
+            try {
+                resultsDiv.innerHTML = '<div class="fk-search-result">Searching...</div>';
+                resultsDiv.style.display = 'block';
+                
+                const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    resultsDiv.innerHTML = '';
+                    data.results.forEach(result => {
+                        const resultDiv = document.createElement('div');
+                        resultDiv.className = 'fk-search-result';
+                        resultDiv.innerHTML = result.display;
+                        resultDiv.onclick = () => selectForeignKey(input, result.id, result.display);
+                        resultsDiv.appendChild(resultDiv);
+                    });
+                } else {
+                    resultsDiv.innerHTML = '<div class="fk-search-result">No results found</div>';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsDiv.innerHTML = '<div class="fk-search-result">Search failed</div>';
+            }
+        }
+        
+        function selectForeignKey(searchInput, id, display) {
+            const targetInput = document.getElementById(searchInput.dataset.targetInput);
+            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+            const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
+            
+            // Set the ID in the hidden input
+            targetInput.value = id;
+            
+            // Update the display
+            selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
+            selectedDisplay.style.display = 'block';
+            
+            // Hide search input and results
+            searchInput.style.display = 'none';
+            resultsDiv.style.display = 'none';
+        }
+        
+        function showForeignKeySearch(displayElement) {
+            const container = displayElement.parentElement;
+            const searchInput = container.querySelector('.fk-search-input');
+            
+            // Show search input and focus it
+            searchInput.style.display = 'block';
+            searchInput.focus();
+            searchInput.select();
+            
+            // Hide display element temporarily
+            displayElement.style.display = 'none';
+        }
+        
+        async function loadForeignKeyDisplay(searchInput, id) {
+            const table = searchInput.dataset.table;
+            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+            
+            if (!id) return;
+            
+            try {
+                const response = await fetch(`/get_foreign_key_display/${table}/${id}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
+                    selectedDisplay.style.display = 'block';
+                    searchInput.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading FK display:', error);
+            }
+        }
+
+        // Junction table verification
+        function handleJunctionVerification(input) {
+            const value = input.value.trim();
+            const junctionName = input.dataset.junctionName;
+            const mainId = input.dataset.mainId;
+            const statusDiv = input.parentElement.querySelector('.verification-status');
+            const infoDiv = input.parentElement.querySelector('.verification-info');
+            const addButton = document.getElementById(`add-junction-${junctionName}-btn`);
+            
+            // Clear previous timeout
+            if (junctionVerificationTimeouts[junctionName]) {
+                clearTimeout(junctionVerificationTimeouts[junctionName]);
+            }
+            
+            if (value === '') {
+                statusDiv.innerHTML = '';
+                infoDiv.innerHTML = '';
+                addButton.disabled = true;
+                return;
+            }
+            
+            // Show loading state
+            statusDiv.innerHTML = '<span style="color: #ffc107;">⏳</span>';
+            infoDiv.innerHTML = 'Verifying...';
+            addButton.disabled = true;
+            
+            // Debounce the verification
+            junctionVerificationTimeouts[junctionName] = setTimeout(() => {
+                verifyJunctionId('{{ table_name }}', mainId, value, junctionName);
+            }, 500);
+        }
+        
+        async function verifyJunctionId(tableName, mainId, id, junctionName) {
+            const statusDiv = document.querySelector(`#junction-${junctionName}-id`).parentElement.querySelector('.verification-status');
+            const infoDiv = document.querySelector(`#junction-${junctionName}-id`).parentElement.querySelector('.verification-info');
+            const addButton = document.getElementById(`add-junction-${junctionName}-btn`);
+            
+            try {
+                const response = await fetch(`/verify_junction_id/${tableName}/${mainId}/${id}`, {
+                    method: 'GET',
+                });
+                
+                const data = await response.json();
+                
+                if (data.exists) {
+                    if (data.already_linked) {
+                        statusDiv.innerHTML = '<span style="color: #ffc107;">⚠️</span>';
+                        infoDiv.innerHTML = `Already linked to: ${data.display_name}`;
+                        addButton.disabled = true;
+                    } else {
+                        statusDiv.innerHTML = '<span style="color: #28a745;">✓</span>';
+                        infoDiv.innerHTML = `Found: ${data.display_name}`;
+                        addButton.disabled = false;
+                    }
+                } else {
+                    statusDiv.innerHTML = '<span style="color: #dc3545;">✗</span>';
+                    infoDiv.innerHTML = 'ID not found';
+                    addButton.disabled = true;
+                }
+            } catch (error) {
+                console.error('Verification error:', error);
+                statusDiv.innerHTML = '<span style="color: #dc3545;">⚠️</span>';
+                infoDiv.innerHTML = 'Verification failed';
+                addButton.disabled = true;
+            }
+        }
+
+        // Junction table row editing
+        function editJunctionRow(rowIndex, junctionName) {
+            const row = document.getElementById(`junction-row-${rowIndex}`);
+            const displayValues = row.querySelectorAll('.display-value');
+            const editValues = row.querySelectorAll('.edit-value');
+            const editBtn = row.querySelector('.edit-btn');
+            const saveBtn = row.querySelector('.save-btn');
+            const cancelBtn = row.querySelector('.cancel-btn');
+            
+            // Show edit inputs, hide display values
+            displayValues.forEach(el => el.style.display = 'none');
+            editValues.forEach(el => el.style.display = 'block');
+            
+            // Show save/cancel buttons, hide edit button
+            editBtn.style.display = 'none';
+            saveBtn.style.display = 'inline-block';
+            cancelBtn.style.display = 'inline-block';
+            
+            // Add visual indicator
+            row.classList.add('editable-row');
+        }
+        
+        function cancelJunctionEdit(rowIndex) {
+            const row = document.getElementById(`junction-row-${rowIndex}`);
+            const displayValues = row.querySelectorAll('.display-value');
+            const editValues = row.querySelectorAll('.edit-value');
+            const editBtn = row.querySelector('.edit-btn');
+            const saveBtn = row.querySelector('.save-btn');
+            const cancelBtn = row.querySelector('.cancel-btn');
+            
+            // Restore original values
+            editValues.forEach((input, index) => {
+                input.value = displayValues[index].textContent;
+            });
+            
+            // Show display values, hide edit inputs
+            displayValues.forEach(el => el.style.display = 'block');
+            editValues.forEach(el => el.style.display = 'none');
+            
+            // Show edit button, hide save/cancel buttons
+            editBtn.style.display = 'inline-block';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+            
+            // Remove visual indicator
+            row.classList.remove('editable-row');
+        }
+        
+        async function saveJunctionRow(rowIndex, junctionName) {
+            const row = document.getElementById(`junction-row-${rowIndex}`);
+            const editValues = row.querySelectorAll('.edit-value');
+            
+            // Collect form data
+            const formData = new FormData();
+            formData.append('junction_name', junctionName);
+            
+            // Add original primary key values for WHERE clause
+            row.querySelectorAll('input[type="hidden"]').forEach(input => {
+                formData.append(`original_${input.name}`, input.value);
+            });
+            
+            // Add updated extra column values
+            editValues.forEach(input => {
+                const columnName = input.closest('td').getAttribute('data-column');
+                if (columnName) {
+                    formData.append(`extra_${columnName}`, input.value);
+                }
+            });
+            
+            try {
+                const response = await fetch(`/{{ table_name }}/update_junction_entry`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    // Update display values
+                    const displayValues = row.querySelectorAll('.display-value');
+                    editValues.forEach((input, index) => {
+                        displayValues[index].textContent = input.value;
+                    });
+                    
+                    // Switch back to display mode
+                    cancelJunctionEdit(rowIndex);
+                } else {
+                    alert('Failed to update junction entry');
+                }
+            } catch (error) {
+                console.error('Save error:', error);
+                alert('Error saving changes');
+            }
+        }
+    </script>
 </body>
 </html>
