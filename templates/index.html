@@ -245,7 +245,7 @@
         <ul>
             {% for table in tables %}
             <li>
-                <a href="{{ url_for('index', table_name=table) }}" class="{{ 'active' if table == table_name }}">
+                <a href="{{ url_for('dbview.index', table_name=table) }}" class="{{ 'active' if table == table_name }}">
                     {{ table | capitalize }}
                 </a>
             </li>
@@ -265,7 +265,7 @@
 
             <div class="form-container">
                 <h2>Add New Row</h2>
-                <form action="{{ url_for('add_row', table_name=table_name) }}" method="post">
+                <form action="{{ url_for('dbmod.row.add_row', table_name=table_name) }}" method="post">
                     {% for col in schema.keys() %}
                     {% if write_only_config and col == write_only_config['contributor_column'] %}
                         {# Skip the contributor column as it will be auto-filled #}
@@ -353,7 +353,7 @@
                         {% endfor %}
                         <td class="actions" onclick="event.stopPropagation();">
                             <button class="expand-btn" onclick="redirectToExpandedView('{{ table_name }}', {% if primary_key is string %}'{{ row[primary_key] }}'{% else %}[{% for pk_col in primary_key %}'{{ row[pk_col] }}'{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %})">Expand</button>
-                            <form action="{{ url_for('delete_row', table_name=table_name) }}" method="post" style="display:inline;">
+                            <form action="{{ url_for('dbmod.row.delete_row', table_name=table_name) }}" method="post" style="display:inline;">
                                 {% if primary_key is string %}
                                     <input type="hidden" name="{{ primary_key }}" value="{{ row[primary_key] }}">
                                 {% else %}

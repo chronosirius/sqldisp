@@ -15,6 +15,8 @@ PRIMARY_KEYS = {
     'databank': ['id', 'topic']
 } # Map your table names to their primary keys
 
+DEFAULT_TABLE = TABLES_TO_SHOW[0] if TABLES_TO_SHOW else None
+
 # Configuration for column widths
 # Only 'description' has a fixed width. All other columns will be flexible.
 COLUMN_WIDTHS = {

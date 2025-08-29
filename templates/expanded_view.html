@@ -331,7 +331,7 @@
         <ul>
             {% for table in tables %}
             <li>
-                <a href="{{ url_for('index', table_name=table) }}">
+                <a href="{{ url_for('dbview.index', table_name=table) }}">
                     {{ table | capitalize }}
                 </a>
             </li>
@@ -348,7 +348,7 @@
                     {% for pk_col in primary_key %}{{ row_data[pk_col] }}{% if not loop.last %}/{% endif %}{% endfor %}
                 {% endif %}
             </h1>
-            <a href="{{ url_for('index', table_name=table_name) }}">← Back to Table</a>
+            <a href="{{ url_for('dbview.index', table_name=table_name) }}">← Back to Table</a>
 
             {% if error %}
             <div class="error">
@@ -358,7 +358,7 @@
 
             <div class="form-container">
                 <h2>Update {{ table_name }}</h2>
-                <form action="{{ url_for('update_row', table_name=table_name) }}" method="post">
+                <form action="{{ url_for('dbmod.row.update_row', table_name=table_name) }}" method="post">
                     {% for col in schema.keys() %}
                     <div class="form-group">
                         <label for="update_{{ col }}">{{ col }}:</label>
@@ -415,7 +415,7 @@
                                         <small style="margin-left: 5px;">(Owner)</small>
                                     {% endif %}
                                     {% if is_first_contributor and not loop.first %}
-                                        <form action="{{ url_for('remove_contributor', table_name=table_name) }}" method="post" style="display: inline; margin-left: 5px;">
+                                        <form action="{{ url_for('dbmod.contrib.remove_contributor', table_name=table_name) }}" method="post" style="display: inline; margin-left: 5px;">
                                             {% if primary_key is string %}
                                                 <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
                                             {% else %}
@@ -442,7 +442,7 @@
                     {% set current_user = session['db_user'] %}
                     {% set is_first_contributor = contributors|first|trim == current_user %}
                     {% if is_first_contributor %}
-                        <form action="{{ url_for('add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
+                        <form action="{{ url_for('dbmod.contrib.add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
                             {% if primary_key is string %}
                                 <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
                             {% else %}
@@ -457,7 +457,7 @@
                         <p style="color: #666; font-style: italic;">Only the owner ({{ contributors|first|trim }}) can add new contributors.</p>
                     {% endif %}
                 {% else %}
-                    <form action="{{ url_for('add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
+                    <form action="{{ url_for('dbmod.contrib.add_contributor', table_name=table_name) }}" method="post" class="add-contributor-form">
                         {% if primary_key is string %}
                             <input type="hidden" name="{{ primary_key }}" value="{{ row_data[primary_key] }}">
                         {% else %}
@@ -566,7 +566,7 @@
 
                 <div class="junction-form">
                     <h4>Add New {{ junction_data.relationship_name | capitalize }}</h4>
-                    <form action="{{ url_for('add_junction_entry', table_name=table_name) }}" method="post">
+                    <form action="{{ url_for('dbmod.jct.add_junction_entry', table_name=table_name) }}" method="post">
                         <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
                         {% if primary_key is string %}
                             <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
