@@ -1,5 +1,5 @@
 from config import MANY_TO_MANY_CONFIG, PRIMARY_KEYS
-from flask import Blueprint, redirect, request, session, url_for
+from flask import Blueprint, redirect, request, session, url_for, jsonify
 from functions import get_db_connection
 jct = Blueprint('jct', __name__)
 
@@ -49,12 +49,12 @@ def add_junction_entry(table_name):
         connection.commit()
     except Exception as e:
         print(f"Error adding junction entry: {e}")
-        return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
+        return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
     finally:
         if connection:
             connection.close()
 
-    return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id))
+    return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id))
 
 
 @jct.route('/<string:table_name>/remove_junction_entry', methods=['POST'])
@@ -108,12 +108,12 @@ def remove_junction_entry(table_name):
         connection.commit()
     except Exception as e:
         print(f"Error removing junction entry: {e}")
-        return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
+        return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
     finally:
         if connection:
             connection.close()
 
-    return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id))
+    return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id))
 
 
 @jct.route('/<string:table_name>/update_junction_entry', methods=['POST'])
@@ -174,18 +174,17 @@ def update_junction_entry(table_name):
         connection.commit()
     except Exception as e:
         print(f"Error updating junction entry: {e}")
-        return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
+        return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id, error=str(e)))
     finally:
         if connection:
             connection.close()
 
-    return redirect(url_for('expanded_view', table_name=table_name, row_id=main_id))
+    return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=main_id))
 
 
 @jct.route('/verify_junction_id/<string:table_name>/<string:main_id>/<string:junction_id>')
 def verify_junction_id(table_name, main_id, junction_id):
     """Verifies if a junction ID exists and returns information about it."""
-    from flask import jsonify
 
     connection = None
     if 'db_user' not in session:
@@ -237,7 +236,7 @@ def verify_junction_id(table_name, main_id, junction_id):
             })
 
     except Exception as e:
-        print(f"Error verifying junction ID: {e}")
+        print(f"Error verifying junction ID: {e} {e.__traceback__}")
         return jsonify({'error': str(e)}), 500
     finally:
         if connection:

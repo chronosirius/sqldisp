@@ -323,6 +323,58 @@
             color: #666;
             min-height: 18px;
         }
+        /* Junction FK search specific styles */
+        .junction-fk-search-container {
+            position: relative;
+            margin-top: 5px;
+        }
+        .junction-fk-search-input {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 12px;
+        }
+        .junction-fk-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ccc;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 150px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        .junction-fk-search-result {
+            padding: 8px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
+        }
+        .junction-fk-search-result:hover {
+            background-color: #f5f5f5;
+        }
+        .junction-fk-search-result:last-child {
+            border-bottom: none;
+        }
+        .junction-fk-selected-display {
+            margin-top: 5px;
+            padding: 6px;
+            background-color: #e8f5e8;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #555;
+            cursor: pointer;
+            display: none;
+        }
+        .junction-fk-selected-display:hover {
+            background-color: #d4edda;
+        }
     </style>
 </head>
 <body>
@@ -498,7 +550,7 @@
                             <tr id="junction-row-{{ loop.index }}">
                                 <td>
                                     {% if config.other_table == table_name %}
-                                        <a href="{{ url_for('expanded_view', table_name=config.other_table, row_id=row.other_pk) }}" class="related-link">
+                                        <a href="{{ url_for('dbview.expanded_view', table_name=config.other_table, row_id=row.other_pk) }}" class="related-link">
                                             {{ row.other_display }}
                                         </a>
                                     {% else %}
@@ -525,7 +577,7 @@
                                     <button class="action-btn save-btn" style="display: none;" onclick="saveJunctionRow({{ loop.index }}, '{{ junction_data.relationship_name }}')">Save</button>
                                     <button class="action-btn cancel-btn" style="display: none;" onclick="cancelJunctionEdit({{ loop.index }})">Cancel</button>
                                     
-                                    <form action="{{ url_for('remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
+                                    <form action="{{ url_for('dbmod.jct.remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
                                         <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
                                         {% if primary_key is string %}
                                             <input type="hidden" name="{{ config.fk_self }}" value="{{ row_data[primary_key] }}">
@@ -550,7 +602,7 @@
                     {% for item in junction_data.rows %}
                     <div class="related-item">
                         <span>{{ item[junction_data.config.other_display_column] }}</span>
-                        <form action="{{ url_for('remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
+                        <form action="{{ url_for('dbmod.jct.remove_junction_entry', table_name=table_name) }}" method="post" style="display:inline;">
                             <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
                             {% if primary_key is string %}
                                 <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
@@ -575,18 +627,30 @@
                         {% endif %}
                         
                         <div class="form-row">
-                            <div class="form-group junction-verification">
+                            <div class="form-group">
                                 <label for="junction-{{ junction_data.relationship_name }}-id">{{ junction_data.config.other_table | capitalize }} ID:</label>
                                 <input type="text" 
                                        name="{{ junction_data.config.fk_other }}" 
                                        id="junction-{{ junction_data.relationship_name }}-id"
                                        placeholder="Enter {{ junction_data.config.other_table }} ID" 
-                                       required
-                                       data-junction-name="{{ junction_data.relationship_name }}"
-                                       data-main-id="{% if primary_key is string %}{{ row_data[primary_key] }}{% else %}{{ row_data[primary_key[0]] }}{% endif %}"
-                                       style="padding-right: 35px;">
-                                <div class="verification-status"></div>
-                                <div class="verification-info"></div>
+                                       required>
+                                
+                                <!-- Add FK search for junction table -->
+                                <div class="junction-fk-search-container">
+                                    <input type="text" 
+                                           class="junction-fk-search-input" 
+                                           placeholder="Search {{ junction_data.config.other_table }}..."
+                                           data-target-input="junction-{{ junction_data.relationship_name }}-id"
+                                           data-table="{{ junction_data.config.other_table }}"
+                                           data-junction-name="{{ junction_data.relationship_name }}"
+                                           data-main-id="{% if primary_key is string %}{{ row_data[primary_key] }}{% else %}{{ row_data[primary_key[0]] }}{% endif %}"
+                                           data-search-columns="{{ junction_data.config.get('search_columns', ['name', 'title', 'description'])|join(',') }}"
+                                           data-display-columns="{{ junction_data.config.get('display_columns', ['name', 'title', 'description'])|join(',') }}">
+                                    <div class="junction-fk-search-results"></div>
+                                    <div class="junction-fk-selected-display" onclick="showJunctionForeignKeySearch(this)">
+                                        Click to search for {{ junction_data.config.other_table }}
+                                    </div>
+                                </div>
                             </div>
                             
                             {% for col in junction_data.config.get('extra_columns', []) %}
@@ -625,7 +689,7 @@
     <script>
         // Foreign Key Search functionality
         let fkSearchTimeouts = {};
-        let junctionVerificationTimeouts = {};
+        let junctionFkSearchTimeouts = {};
         
         document.addEventListener('DOMContentLoaded', function() {
             // Initialize foreign key search inputs
@@ -651,7 +715,7 @@
                 input.addEventListener('blur', function() {
                     // Delay hiding results to allow clicks
                     setTimeout(() => {
-                        const results = this.parentElement.querySelector('.fk-search-results');
+                        const results = this.parentElement.querySelector('.junction-fk-search-results');
                         results.style.display = 'none';
                     }, 200);
                 });
@@ -666,7 +730,7 @@
                         if (this.value) {
                             loadForeignKeyDisplay(fkSearch, this.value);
                         } else {
-                            const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                            const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display,.junction-fk-selected-display');
                             selectedDisplay.style.display = 'none';
                             fkSearch.style.display = 'block';
                         }
@@ -674,20 +738,13 @@
                     
                     input.addEventListener('input', function() {
                         // Clear the display when manually typing
-                        const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display');
+                        const selectedDisplay = fkSearch.parentElement.querySelector('.fk-selected-display,.junction-fk-selected-display');
                         if (selectedDisplay.style.display === 'block') {
                             selectedDisplay.style.display = 'none';
                             fkSearch.style.display = 'block';
                         }
                     });
                 }
-            });
-
-            // Initialize junction table verification
-            document.querySelectorAll('[data-junction-name]').forEach(input => {
-                input.addEventListener('input', function() {
-                    handleJunctionVerification(this);
-                });
             });
         });
         
@@ -747,6 +804,11 @@
             const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
             const resultsDiv = searchInput.parentElement.querySelector('.fk-search-results');
             
+            if (!targetInput || !selectedDisplay || !resultsDiv) {
+                console.error('Required elements not found for FK selection');
+                return;
+            }
+            
             // Set the ID in the hidden input
             targetInput.value = id;
             
@@ -763,6 +825,11 @@
             const container = displayElement.parentElement;
             const searchInput = container.querySelector('.fk-search-input');
             
+            if (!searchInput) {
+                console.error('FK search input not found');
+                return;
+            }
+            
             // Show search input and focus it
             searchInput.style.display = 'block';
             searchInput.focus();
@@ -774,7 +841,7 @@
         
         async function loadForeignKeyDisplay(searchInput, id) {
             const table = searchInput.dataset.table;
-            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display');
+            const selectedDisplay = searchInput.parentElement.querySelector('.fk-selected-display,.junction-fk-selected-display');
             
             if (!id) return;
             
@@ -786,77 +853,172 @@
                     selectedDisplay.innerHTML = `Selected: ${data.display} (ID: ${id})`;
                     selectedDisplay.style.display = 'block';
                     searchInput.style.display = 'none';
+                    const addButton = document.getElementById(`add-junction-${searchInput.dataset.junctionName}-btn`);
+                    console.log(addButton);
+                    if (addButton) {
+                        addButton.disabled = false;
+                    }
                 }
             } catch (error) {
                 console.error('Error loading FK display:', error);
             }
         }
 
-        // Junction table verification
-        function handleJunctionVerification(input) {
-            const value = input.value.trim();
-            const junctionName = input.dataset.junctionName;
-            const mainId = input.dataset.mainId;
-            const statusDiv = input.parentElement.querySelector('.verification-status');
-            const infoDiv = input.parentElement.querySelector('.verification-info');
-            const addButton = document.getElementById(`add-junction-${junctionName}-btn`);
+        // Junction FK Search functionality
+        function handleJunctionForeignKeySearch(input) {
+            console.log('handleJunctionForeignKeySearch called with:', input.value);
+            const query = input.value.trim();
+            const resultsDiv = input.parentElement.querySelector('.junction-fk-search-results');
+            const inputId = input.dataset.targetInput;
+            
+            console.log('Search query:', query);
+            console.log('Results div found:', !!resultsDiv);
             
             // Clear previous timeout
-            if (junctionVerificationTimeouts[junctionName]) {
-                clearTimeout(junctionVerificationTimeouts[junctionName]);
+            if (junctionFkSearchTimeouts[inputId]) {
+                clearTimeout(junctionFkSearchTimeouts[inputId]);
             }
             
-            if (value === '') {
-                statusDiv.innerHTML = '';
-                infoDiv.innerHTML = '';
-                addButton.disabled = true;
+            if (query.length < 1) {
+                if (resultsDiv) {
+                    resultsDiv.style.display = 'none';
+                }
+                const addButton = document.getElementById(`add-junction-${input.dataset.junctionName}-btn`);
+                console.log(addButton)
+                if (addButton) {
+                    addButton.disabled = true;
+                }
                 return;
             }
             
-            // Show loading state
-            statusDiv.innerHTML = '<span style="color: #ffc107;">⏳</span>';
-            infoDiv.innerHTML = 'Verifying...';
-            addButton.disabled = true;
-            
-            // Debounce the verification
-            junctionVerificationTimeouts[junctionName] = setTimeout(() => {
-                verifyJunctionId('{{ table_name }}', mainId, value, junctionName);
-            }, 500);
+            // Debounce the search
+            junctionFkSearchTimeouts[inputId] = setTimeout(() => {
+                console.log('Executing search after debounce...');
+                searchJunctionForeignKey(input, query);
+            }, 300);
         }
         
-        async function verifyJunctionId(tableName, mainId, id, junctionName) {
-            const statusDiv = document.querySelector(`#junction-${junctionName}-id`).parentElement.querySelector('.verification-status');
-            const infoDiv = document.querySelector(`#junction-${junctionName}-id`).parentElement.querySelector('.verification-info');
-            const addButton = document.getElementById(`add-junction-${junctionName}-btn`);
+        async function searchJunctionForeignKey(input, query) {
+            const resultsDiv = input.parentElement.querySelector('.junction-fk-search-results');
+            const table = input.dataset.table;
+            const junctionName = input.dataset.junctionName;
+            const mainId = input.dataset.mainId;
+            
+            // Get search columns from the input data attributes or use defaults
+            const searchColumns = input.dataset.searchColumns || getJunctionSearchColumns(table);
             
             try {
-                const response = await fetch(`/verify_junction_id/${tableName}/${mainId}/${id}`, {
+                resultsDiv.innerHTML = '<div class="junction-fk-search-result">Searching...</div>';
+                resultsDiv.style.display = 'block';
+                
+                const response = await fetch(`/search_foreign_key/${table}?q=${encodeURIComponent(query)}&columns=${encodeURIComponent(searchColumns)}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    resultsDiv.innerHTML = '';
+                    
+                    // Check each result for existing relationships
+                    for (const result of data.results) {
+                        const alreadyLinked = await checkIfAlreadyLinked(table, mainId, result.id, junctionName);
+                        
+                        const resultDiv = document.createElement('div');
+                        resultDiv.className = 'junction-fk-search-result';
+                        
+                        if (alreadyLinked) {
+                            resultDiv.innerHTML = `${result.display} <em style="color: #ffc107;">(Already linked)</em>`;
+                            resultDiv.style.backgroundColor = '#fff3cd';
+                            resultDiv.style.cursor = 'not-allowed';
+                        } else {
+                            resultDiv.innerHTML = result.display;
+                            resultDiv.onclick = () => selectJunctionForeignKey(input, result.id, result.display);
+                        }
+                        resultsDiv.appendChild(resultDiv);
+                    }
+                } else {
+                    resultsDiv.innerHTML = '<div class="junction-fk-search-result">No results found</div>';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsDiv.innerHTML = '<div class="junction-fk-search-result">Search failed</div>';
+            }
+        }
+        
+        function selectJunctionForeignKey(searchInput, id, display) {
+            const targetInput = document.getElementById(searchInput.dataset.targetInput);
+            const selectedDisplay = searchInput.parentElement.querySelector('.junction-fk-selected-display');
+            const resultsDiv = searchInput.parentElement.querySelector('.junction-fk-search-results');
+            const addButton = document.getElementById(`add-junction-${searchInput.dataset.junctionName}-btn`);
+            
+            if (!targetInput || !selectedDisplay || !resultsDiv) {
+                console.error('Required elements not found for junction FK selection');
+                return;
+            }
+            
+            // Set the ID in the hidden input
+            targetInput.value = id;
+            
+            // Update the display
+            selectedDisplay.innerHTML = `Selected: ${display} (ID: ${id})`;
+            selectedDisplay.style.display = 'block';
+            
+            // Hide search input and results
+            searchInput.style.display = 'none';
+            resultsDiv.style.display = 'none';
+            
+            // Enable the add button
+            if (addButton) {
+                addButton.disabled = false;
+            }
+        }
+        
+        function showJunctionForeignKeySearch(displayElement) {
+            const container = displayElement.parentElement;
+            const searchInput = container.querySelector('.junction-fk-search-input');
+            
+            if (!searchInput) {
+                console.error('Junction FK search input not found');
+                return;
+            }
+            
+            const addButton = document.getElementById(`add-junction-${searchInput.dataset.junctionName}-btn`);
+            
+            // Show search input and focus it
+            searchInput.style.display = 'block';
+            searchInput.focus();
+            searchInput.select();
+            
+            // Hide display element temporarily and disable button
+            displayElement.style.display = 'none';
+            if (addButton) {
+                addButton.disabled = true;
+            }
+        }
+        
+        
+        async function checkIfAlreadyLinked(tableName, mainId, otherId, junctionName) {
+            try {
+                const response = await fetch(`/verify_junction_id/${tableName}/${mainId}/${otherId}`, {
                     method: 'GET',
                 });
                 
                 const data = await response.json();
-                
-                if (data.exists) {
-                    if (data.already_linked) {
-                        statusDiv.innerHTML = '<span style="color: #ffc107;">⚠️</span>';
-                        infoDiv.innerHTML = `Already linked to: ${data.display_name}`;
-                        addButton.disabled = true;
-                    } else {
-                        statusDiv.innerHTML = '<span style="color: #28a745;">✓</span>';
-                        infoDiv.innerHTML = `Found: ${data.display_name}`;
-                        addButton.disabled = false;
-                    }
-                } else {
-                    statusDiv.innerHTML = '<span style="color: #dc3545;">✗</span>';
-                    infoDiv.innerHTML = 'ID not found';
-                    addButton.disabled = true;
-                }
+                return data.already_linked || false;
             } catch (error) {
-                console.error('Verification error:', error);
-                statusDiv.innerHTML = '<span style="color: #dc3545;">⚠️</span>';
-                infoDiv.innerHTML = 'Verification failed';
-                addButton.disabled = true;
+                console.error('Error checking if already linked:', error);
+                return false;
             }
+        }
+        
+        function getJunctionSearchColumns(table) {
+            // This would ideally come from the server, but for now we'll use common defaults
+            // You might want to pass this data from the template or make it configurable
+            const commonColumns = {
+                'users': 'username,email',
+                'groups': 'name,description',
+                'databank': 'topic,title'
+            };
+            
+            return commonColumns[table] || 'name,title,description';
         }
 
         // Junction table row editing
@@ -951,6 +1113,29 @@
                 alert('Error saving changes');
             }
         }
+
+        // Initialize junction FK search inputs
+        document.querySelectorAll('.junction-fk-search-input').forEach(input => {
+            const targetInput = document.getElementById(input.dataset.targetInput);
+            
+            input.addEventListener('input', function() {
+                handleJunctionForeignKeySearch(this);
+            });
+            
+            input.addEventListener('focus', function() {
+                if (this.value.length >= 1) {
+                    handleJunctionForeignKeySearch(this);
+                }
+            });
+            
+            input.addEventListener('blur', function() {
+                // Delay hiding results
+                setTimeout(() => {
+                    const results = this.parentElement.querySelector('.junction-fk-search-results');
+                    results.style.display = 'none';
+                }, 200);
+            })
+        })
     </script>
 </body>
-</html>
+</html> 

@@ -112,14 +112,14 @@ def add_row(table_name):
                                         row_id_path = str(existing_row[primary_key_config])
 
                                     connection.commit()
-                                    return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
+                                    return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=row_id_path))
                                 else:
                                     # User is already a contributor, just redirect to expanded view
                                     if isinstance(primary_key_config, list):
                                         row_id_path = '/'.join(str(existing_row[pk]) for pk in primary_key_config)
                                     else:
                                         row_id_path = str(existing_row[primary_key_config])
-                                    return redirect(url_for('expanded_view', table_name=table_name, row_id=row_id_path))
+                                    return redirect(url_for('dbview.expanded_view', table_name=table_name, row_id=row_id_path))
                             else:
                                 # No matching row found with configured keys, this shouldn't happen with a duplicate error
                                 print(f"Warning: Duplicate error but no matching row found for keys: {duplicate_keys}")
