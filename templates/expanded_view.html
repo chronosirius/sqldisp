@@ -421,9 +421,13 @@
                             {% endfor %}
                         </select>
                         {% else %}
-                        <input type="{{ schema[col]['html_input_type'] }}" id="update_{{ col }}" name="{{ col }}" 
-                               value="{{ row_data[col] if row_data[col] is not none else '' }}" 
-                               {% if schema[col]['is_read_only'] %}readonly{% endif %}>
+                        <input type="{{ schema[col]['html_input_type'] }}" 
+                        {% if schema[col]['require_decimal'] %}
+                            step="any"
+                        {% endif %}
+                            id="update_{{ col }}" name="{{ col }}" 
+                            value="{{ row_data[col] if row_data[col] is not none else '' }}" 
+                            {% if schema[col]['is_read_only'] %}readonly{% endif %}>
                         {% endif %}
                         
                         <!-- Add foreign key search if this column is a foreign key -->
@@ -527,6 +531,73 @@
             {% for junction_data in all_junction_data %}
             <div class="related-section">
                 <h2>{{ junction_data.relationship_name | capitalize }}</h2>
+                <div class="junction-form">
+                    <h4>Add New {{ junction_data.relationship_name | capitalize }}</h4>
+                    <form action="{{ url_for('dbmod.jct.add_junction_entry', table_name=table_name) }}" method="post">
+                        <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
+                        {% if primary_key is string %}
+                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
+                        {% else %}
+                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key[0]] }}">
+                        {% endif %}
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="junction-{{ junction_data.relationship_name }}-id">{{ junction_data.config.other_table | capitalize }} ID:</label>
+                                <input type="text" 
+                                       name="{{ junction_data.config.fk_other }}" 
+                                       id="junction-{{ junction_data.relationship_name }}-id"
+                                       placeholder="Enter {{ junction_data.config.other_table }} ID" 
+                                       required>
+                                
+                                <!-- Add FK search for junction table -->
+                                <div class="junction-fk-search-container">
+                                    <input type="text" 
+                                           class="junction-fk-search-input" 
+                                           placeholder="Search {{ junction_data.config.other_table }}..."
+                                           data-target-input="junction-{{ junction_data.relationship_name }}-id"
+                                           data-table="{{ junction_data.config.other_table }}"
+                                           data-junction-name="{{ junction_data.relationship_name }}"
+                                           data-main-id="{% if primary_key is string %}{{ row_data[primary_key] }}{% else %}{{ row_data[primary_key[0]] }}{% endif %}"
+                                           data-search-columns="{{ junction_data.config.get('search_columns', ['name', 'title', 'description'])|join(',') }}"
+                                           data-display-columns="{{ junction_data.config.get('display_columns', ['name', 'title', 'description'])|join(',') }}">
+                                    <div class="junction-fk-search-results"></div>
+                                    <div class="junction-fk-selected-display" onclick="showJunctionForeignKeySearch(this)">
+                                        Click to search for {{ junction_data.config.other_table }}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {% for col in junction_data.config.get('extra_columns', []) %}
+                            <div class="form-group">
+                                <label for="extra-{{ junction_data.relationship_name }}-{{ col }}">{{ col | capitalize }}:</label>
+                                {% if junction_data.junction_schema[col]['is_enum'] %}
+                                <select name="extra_{{ col }}" id="extra-{{ junction_data.relationship_name }}-{{ col }}">
+                                    <option value="">-- Select {{ col }} --</option>
+                                    {% for value in junction_data.junction_schema[col]['enum_values'] %}
+                                    <option value="{{ value }}">{{ value }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <input type="{{ junction_data.junction_schema[col]['html_input_type'] }}" 
+                                    {% if junction_data.junction_schema[col]['require_decimal'] %}
+                                        step="any"
+                                    {% endif %}
+                                       name="extra_{{ col }}" 
+                                       id="extra-{{ junction_data.relationship_name }}-{{ col }}"
+                                       placeholder="{{ col | capitalize }}">
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                            
+                            <button type="submit" 
+                                    id="add-junction-{{ junction_data.relationship_name }}-btn" 
+                                    disabled>
+                                Add {{ junction_data.relationship_name | capitalize }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
 
                 {% if junction_data.config.get('show_multiple_rows', False) %}
                     <!-- Show full junction table with extra columns -->
@@ -615,71 +686,6 @@
                     </div>
                     {% endfor %}
                 {% endif %}
-
-                <div class="junction-form">
-                    <h4>Add New {{ junction_data.relationship_name | capitalize }}</h4>
-                    <form action="{{ url_for('dbmod.jct.add_junction_entry', table_name=table_name) }}" method="post">
-                        <input type="hidden" name="junction_name" value="{{ junction_data.relationship_name }}">
-                        {% if primary_key is string %}
-                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key] }}">
-                        {% else %}
-                            <input type="hidden" name="{{ junction_data.config.fk_self }}" value="{{ row_data[primary_key[0]] }}">
-                        {% endif %}
-                        
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="junction-{{ junction_data.relationship_name }}-id">{{ junction_data.config.other_table | capitalize }} ID:</label>
-                                <input type="text" 
-                                       name="{{ junction_data.config.fk_other }}" 
-                                       id="junction-{{ junction_data.relationship_name }}-id"
-                                       placeholder="Enter {{ junction_data.config.other_table }} ID" 
-                                       required>
-                                
-                                <!-- Add FK search for junction table -->
-                                <div class="junction-fk-search-container">
-                                    <input type="text" 
-                                           class="junction-fk-search-input" 
-                                           placeholder="Search {{ junction_data.config.other_table }}..."
-                                           data-target-input="junction-{{ junction_data.relationship_name }}-id"
-                                           data-table="{{ junction_data.config.other_table }}"
-                                           data-junction-name="{{ junction_data.relationship_name }}"
-                                           data-main-id="{% if primary_key is string %}{{ row_data[primary_key] }}{% else %}{{ row_data[primary_key[0]] }}{% endif %}"
-                                           data-search-columns="{{ junction_data.config.get('search_columns', ['name', 'title', 'description'])|join(',') }}"
-                                           data-display-columns="{{ junction_data.config.get('display_columns', ['name', 'title', 'description'])|join(',') }}">
-                                    <div class="junction-fk-search-results"></div>
-                                    <div class="junction-fk-selected-display" onclick="showJunctionForeignKeySearch(this)">
-                                        Click to search for {{ junction_data.config.other_table }}
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            {% for col in junction_data.config.get('extra_columns', []) %}
-                            <div class="form-group">
-                                <label for="extra-{{ junction_data.relationship_name }}-{{ col }}">{{ col | capitalize }}:</label>
-                                {% if junction_data.junction_schema[col]['is_enum'] %}
-                                <select name="extra_{{ col }}" id="extra-{{ junction_data.relationship_name }}-{{ col }}">
-                                    <option value="">-- Select {{ col }} --</option>
-                                    {% for value in junction_data.junction_schema[col]['enum_values'] %}
-                                    <option value="{{ value }}">{{ value }}</option>
-                                    {% endfor %}
-                                </select>
-                                {% else %}
-                                <input type="{{ junction_data.junction_schema[col]['html_input_type'] }}" 
-                                       name="extra_{{ col }}" 
-                                       id="extra-{{ junction_data.relationship_name }}-{{ col }}"
-                                       placeholder="{{ col | capitalize }}">
-                                {% endif %}
-                            </div>
-                            {% endfor %}
-                            
-                            <button type="submit" 
-                                    id="add-junction-{{ junction_data.relationship_name }}-btn" 
-                                    disabled>
-                                Add {{ junction_data.relationship_name | capitalize }}
-                            </button>
-                        </div>
-                    </form>
-                </div>
             </div>
             {% endfor %}
 

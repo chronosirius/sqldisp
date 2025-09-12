@@ -250,6 +250,9 @@
                 </a>
             </li>
             {% endfor %}
+            <li>
+                <a href="{{ url_for('graph.graph_route') }}" style="background-color: #077;">Graph</a>
+            </li>
         </ul>
     </div>
 
@@ -279,7 +282,15 @@
                                 {% endfor %}
                             </select>
                             {% else %}
-                            <input type="{{ schema[col]['html_input_type'] }}" id="add_{{ col }}" name="{{ col }}" {% if schema[col]['is_auto_increment'] %}placeholder="Auto-incremented" {% endif %}>
+                            <input type="{{ schema[col]['html_input_type'] }}" 
+                                {% if schema[col]['require_decimal'] %}
+                                    step="any"
+                                {% endif %}
+                                id="add_{{ col }}" 
+                                name="{{ col }}"
+                            {% if schema[col]['is_auto_increment'] %}
+                                placeholder="Auto-incremented" {% endif %}
+                            >
                             {% endif %}
                             
                             <!-- Add foreign key search if this column is a foreign key -->
