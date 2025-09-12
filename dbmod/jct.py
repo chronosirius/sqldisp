@@ -236,7 +236,7 @@ def verify_junction_id(table_name, main_id, junction_id):
             })
 
     except Exception as e:
-        print(f"Error verifying junction ID: {e} {e.__traceback__}")
+        print(f"Error verifying junction ID: {e.with_traceback(e.__traceback__)}")
         return jsonify({'error': str(e)}), 500
     finally:
         if connection:

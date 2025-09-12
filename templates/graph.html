@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<head>
+<meta charset="utf-8">
+<style>
+    body {
+        margin: 0;
+    }
+#container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            padding: 0;
+        }
+</style>
+<title>({{nodecount}}) Graph of rel {% if src %}from {{src}} dist {{dist}}{%endif%} {% if ignore %}ignoring {% for n in ignore %}{{n}}, {%endfor%}{%endif%}</title>
+</head>
+<div id="container"></div>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.1/dist/cytoscape.min.js"></script>
+<script>
+    var gData = {{ data | safe }};
+    const selectedId = new URLSearchParams(window.location.search).get('src');
+    var cy = cytoscape({
+        container: document.getElementById("container"),
+        elements: gData.elements,
+        style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'content': 'data(id)',
+                        'background-color': '#000',
+                        'color': function(ele) {
+                            return ele.data('id') == selectedId ? "#0f0" : "#000";                            
+                        },
+                        'shape': function(ele) {
+                            return ele.data('id') == selectedId ? "vee": "circle";
+                        }
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'label': (e) => {{weightfactor}}/e.data('weight'),
+                        'color': '#f00',
+                        'curve-style': 'bezier',
+                        'width': '5px',
+                        'line-color': '#333',
+                        //'target-arrow-color': '#333',
+                        //'target-arrow-shape': 'triangle'
+                    }
+                }
+            ],
+            layout: {
+                name: 'cose', // A good default layout for general graphs
+                nodeRepulsion: {{weightfactor}}*33000,
+                nodeDimensionsIncludeLabels: true,
+            }
+    })
+
+</script>

@@ -1,6 +1,8 @@
 from config import COLUMN_WIDTHS, MANY_TO_MANY_CONFIG, PRIMARY_KEYS, READ_ONLY_COLUMNS, TABLES_TO_SHOW, VISIBLE_COLUMNS, WRITE_ONLY_CONFIG
 from functions import get_db_connection, get_foreign_key_display_text, get_table_schema
-from flask import Blueprint, redirect, render_template, request, session, url_for
+from flask import Blueprint, redirect, render_template, request, send_file, session, url_for
+import networkx as nx
+import json
 
 dbview = Blueprint('dbview', __name__)
 

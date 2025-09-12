@@ -65,6 +65,8 @@ def get_table_schema(connection, table_name):
         elif 'email' in col_name.lower():
             html_input_type = 'email'
         
+        require_decimal = 'decimal' in col_type or 'float' in col_type or 'double' in col_type
+
         is_primary_key = col['Key'] == 'PRI'
         is_read_only = is_primary_key or col_name in read_only_cols
         
@@ -92,6 +94,7 @@ def get_table_schema(connection, table_name):
             'is_primary_key': is_primary_key,
             'is_auto_increment': 'auto_increment' in col['Extra'].lower(),
             'html_input_type': html_input_type,
+            'require_decimal': require_decimal,
             'is_read_only': is_read_only,
             **foreign_key_info
         }
