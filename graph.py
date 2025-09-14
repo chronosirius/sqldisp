@@ -31,7 +31,7 @@ def graph_route():
         superign_clause = ""
     try:
         with connection.cursor() as cursor:
-            cursor.execute(f"select {GRAPH_CONFIG["columns"].join(',')} from {GRAPH_CONFIG['table']} inner join {GRAPH_CONFIG['foreign_table']} as t1 on {GRAPH_CONFIG['id1']} = t1.id inner join {GRAPH_CONFIG['foreign_table']} as t2 on {GRAPH_CONFIG['id2']} = t2.id where closeness >= {min_closeness}" + superign_clause +';')
+            cursor.execute(f"select {','.join(GRAPH_CONFIG["columns"])} from {GRAPH_CONFIG['table']} inner join {GRAPH_CONFIG['foreign_table']} as t1 on {GRAPH_CONFIG['id1']} = t1.id inner join {GRAPH_CONFIG['foreign_table']} as t2 on {GRAPH_CONFIG['id2']} = t2.id where closeness >= {min_closeness}" + superign_clause +';')
             data = cursor.fetchall()
             for row in data:
                 if not G.has_node((nname1 := GRAPH_CONFIG["node_id_generator_j1"](row))):
