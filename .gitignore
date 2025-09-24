@@ -1,3 +1,4 @@
 config.py
 graphview.py
 update.ps1
+**/__pycache__

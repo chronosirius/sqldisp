@@ -12,13 +12,39 @@
             padding: 0;
         }
 </style>
+
+
 <title>({{nodecount}}) Graph of rel {% if src %}from {{src}} dist {{dist}}{%endif%} {% if ignore %}ignoring {% for n in ignore %}{{n}}, {%endfor%}{%endif%}</title>
 </head>
 <div id="container"></div>
 <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.1/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base/layout-base.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base/cose-base.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js"></script>
+<script src="https://unpkg.com/avsdf-base/avsdf-base.js"></script>
+<script src="https://unpkg.com/cytoscape-avsdf/cytoscape-avsdf.js"></script>
 <script>
-    var gData = {{ data | safe }};
-    const selectedId = new URLSearchParams(window.location.search).get('src');
+    
+
+    const gData = {{ data | safe }};
+    var u = new URLSearchParams(window.location.search)
+    const selectedId = u.get('src');
+    const targetId = u.get('target');
+    const selectedLayoutQp = (u.get('layout') || 'cose').split('-');
+    const selectedLayout = selectedLayoutQp[0];
+    const dir = selectedLayoutQp[1] || 'downward';
+    const bfNodeOrderSetting = parseInt(selectedLayoutQp[2]) || 3;
+    const None = 0;
+
+    var comparator;
+    switch (bfNodeOrderSetting) {
+        case 1: comparator = (a, b) => b.neighborhood().nodes().length - a.neighborhood().nodes().length; break;
+        case 2: comparator = (a, b) => a.neighborhood().nodes().length - b.neighborhood().nodes().length; break;
+        default: comparator = undefined; break;
+    }
+
+    
+
     var cy = cytoscape({
         container: document.getElementById("container"),
         elements: gData.elements,
@@ -29,10 +55,16 @@
                         'content': 'data(id)',
                         'background-color': '#000',
                         'color': function(ele) {
-                            return ele.data('id') == selectedId ? "#0f0" : "#000";                            
+                            if (ele.data('id') == selectedId) {
+                                return "#0f0";
+                            } else if (ele.data('id') == targetId) {
+                                return "#0ff";
+                            } else {
+                                return "#000";
+                            }
                         },
                         'shape': function(ele) {
-                            return ele.data('id') == selectedId ? "vee": "circle";
+                            return (ele.data('id') == selectedId || ele.data('id') == targetId) ? "vee": "circle";
                         }
                     }
                 },
@@ -43,17 +75,56 @@
                         'color': '#f00',
                         'curve-style': 'bezier',
                         'width': '5px',
-                        'line-color': '#333',
+                        'line-color': (e) => {
+                            if (e.data('color')) return e.data('color');
+                            return {{weightfactor}}/e.data('weight') != 5.181 ? '#333' : '#ff0';
+                        },
                         //'target-arrow-color': '#333',
                         //'target-arrow-shape': 'triangle'
                     }
                 }
-            ],
-            layout: {
-                name: 'cose', // A good default layout for general graphs
+            ], 
+    })
+
+
+    let pathLengths = {};
+    cy.elements().bfs({
+    roots: [cy.getElementById(selectedId)],
+    visit: function(i, ele, p, depth, d) {
+        console.log(i, ele, p, depth)
+        pathLengths[i.id()] = ({{dist}}+1) - d;
+    }
+    });
+    console.log(pathLengths)
+
+    var concentricMode;
+    switch (bfNodeOrderSetting) {
+        case 1: concentricMode = (n) => {
+            if (n.id() == selectedId) return 1000000;
+            return n.degree();
+        }; break;
+        case 2: concentricMode = (n) => {
+            return n.degree();
+        }; break;
+        default: concentricMode = (n) => {
+            console.log(n.id(), pathLengths[n.id()])
+            if (n.id() == selectedId) return ({{dist}}|| 1)*25;
+            return ((pathLengths[n.id()])*9 || 0);
+        };
+    }
+
+
+
+    cy.layout({
+                name: selectedLayout,
                 nodeRepulsion: {{weightfactor}}*33000,
                 nodeDimensionsIncludeLabels: true,
+                direction: dir,
+                depthSort: comparator,
+                roots: [selectedId],
+                concentric: concentricMode,
+                equidistant: true,
             }
-    })
+    ).run()
 
 </script>
