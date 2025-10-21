@@ -11,9 +11,30 @@
             display: block;
             padding: 0;
         }
+
+.node-label {
+    /* Basic styling for the label */
+    color: white;
+    font-size: 8px;
+    font-family: Arial, sans-serif;
+    padding: 0;
+    background-color: rgba(0,0,0,0.5);
+    /*border-radius: 3px;*/
+}
+
+.node-label.hidden {
+    display: none;
+}
 </style>
 
-
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
+</script>
 <title>({{nodecount}}) Graph of rel {% if src %}from {{src}} dist {{dist}}{%endif%} {% if ignore %}ignoring {% for n in ignore %}{{n}}, {%endfor%}{%endif%}</title>
 </head>
 <div id="container"></div>
@@ -23,10 +44,25 @@
 <script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js"></script>
 <script src="https://unpkg.com/avsdf-base/avsdf-base.js"></script>
 <script src="https://unpkg.com/cytoscape-avsdf/cytoscape-avsdf.js"></script>
-<script>
-    
+<script src="https://cdn.jsdelivr.net/npm/d3-dispatch@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-quadtree@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-timer@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-binarytree"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-octree"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-force-3d"></script>
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+    import { Line2 } from 'three/addons/lines/Line2.js';
+    import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+    import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+    import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+
+    window.THREE = THREE; // Make THREE globally accessible for OrbitControls
 
     const gData = {{ data | safe }};
+    const nodecount = {{nodecount}};
     var u = new URLSearchParams(window.location.search)
     const selectedId = u.get('src');
     const targetId = u.get('target');
@@ -46,7 +82,11 @@
     
 
     var cy = cytoscape({
+        {% if layout != "3d" %}
         container: document.getElementById("container"),
+        {% else %}
+        headless: true,
+        {% endif %}
         elements: gData.elements,
         style: [
                 {
@@ -104,16 +144,16 @@
             return n.degree();
         }; break;
         case 2: concentricMode = (n) => {
-            return n.degree();
-        }; break;
-        default: concentricMode = (n) => {
-            console.log(n.id(), pathLengths[n.id()])
-            if (n.id() == selectedId) return ({{dist}}|| 1)*25;
-            return ((pathLengths[n.id()])*9 || 0);
+            console.log(n.id(), ((pathLengths[n.id()])*9 || 0)+1/n.degree())
+            if (n.id() == selectedId) return ({{dist}} || 1)*2500;
+            return ((pathLengths[n.id()])*9 || 0)-Math.log(n.degree());
         };
+        default: concentricMode = (n) => {
+            return n.degree()
+        }; break;
     }
 
-
+    {% if layout != '3d' %}
 
     cy.layout({
                 name: selectedLayout,
@@ -124,7 +164,541 @@
                 roots: [selectedId],
                 concentric: concentricMode,
                 equidistant: true,
+                numIter: 5000
             }
     ).run()
+
+    {% else %}
+
+function baseMap(value, inMin, inMax, outMin, outMax) {
+    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+}
+
+    // --- 1. Setup Three.js Scene ---
+const container = document.getElementById('container');
+const width = container.clientWidth;
+const height = container.clientHeight;
+
+// Create the scene, camera, and renderer
+window.scene = new THREE.Scene();
+window.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 100000);
+camera.updateProjectionMatrix();
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(width, height);
+container.appendChild(renderer.domElement);
+
+// *NEW: Setup CSS2DRenderer for labels*
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(width, height);
+labelRenderer.domElement.style.position = 'absolute';
+labelRenderer.domElement.style.top = '0px';
+// Ensure the label renderer is positioned *over* the main canvas
+labelRenderer.domElement.style.pointerEvents = 'none'; // Allows clicking *through* the labels
+container.appendChild(labelRenderer.domElement);
+
+
+// Set camera position (adjust as needed)
+camera.position.z = baseMap(nodecount, 0, 300, 100, 1800); // Pull back for larger graphs
+
+// Add orbit controls for 3D interaction (panning, zooming, rotating)
+// *IMPORTANT: Use the labelRenderer.domElement for controls so they work over the entire container*
+// Using renderer.domElement is fine if the labelRenderer is transparent to clicks.
+const controls = new OrbitControls(camera, renderer.domElement); 
+
+// --- 2. Prepare Data for 3D Force Simulation (No Change) ---
+
+// Convert Cytoscape.js elements into the format required by d3-force-3d
+// Assuming 'cy' is a globally available Cytoscape.js instance
+console.log(selectedId, targetId);
+const nodes3d = cy.nodes().map(node => ({
+    id: node.id(),
+    deg: node.degree(),
+    // Store initial positions if you want to resume a layout
+    x: node.position('x') || 0,
+    y: node.position('y') || 0,
+    z: 0, // Initialize z-coordinate,
+    fx: (node.id() === selectedId) ? 0 : (node.id() === targetId) ? baseMap(nodecount, 0, 300, 40, 1800) : null,
+    fy: (node.id() === selectedId) ? 0 : (node.id() === targetId) ? 50 : null,
+    fz: (node.id() === selectedId) ? 0 : (node.id() === targetId) ? baseMap(nodecount, 0, 300, -40, -1800) : null,
+    fixed: (node.id() === selectedId || node.id() === targetId),
+    color: node.data('color')
+}));
+
+const links3d = cy.edges().map(edge => ({
+    source: edge.source().id(),
+    target: edge.target().id(),
+    weight: edge.data('weight') || 1,
+    t: edge.data('type') || ''
+}));
+
+// --- 3. Initialize and Run 3D Force Simulation (No Change) ---
+
+// Create the 3D force simulation
+const simulation = d3.forceSimulation(nodes3d, 3) // 3 means 3 dimensions
+    .force('link', d3.forceLink(links3d).id(d => d.id).distance(50).strength(0.1))
+    .force('charge', d3.forceManyBody().strength(baseMap(nodecount, 0, 300, -10, -400)).distanceMax(baseMap(nodecount, 0, 300, 100, 1500))) // Repulsion strength
+    .force('center', d3.forceCenter(0, 0, 0)) // Center the graph in 3D space
+    .on('tick', updateGraphPositions)
+    .stop(); // Stop the automatic animation loop
+
+// Run the simulation for a fixed number of iterations for a static layout
+
+
+// --- 4. Create Three.js Objects (The Rendering) ---
+
+// To store the 3D objects associated with the nodes (sphere and label)
+const nodeObjects = {}; 
+
+// Function to create and add 3D objects to the scene
+const maxDegree = cy.nodes().maxDegree()
+var node_radii = [];
+nodes3d.forEach(node => {
+    // Node: Use a SphereGeometry
+    {% if nodecount > 20 %}
+    const NODE_RADIUS = baseMap(node.deg, 0, maxDegree, 4, nodecount*2/3); // Define a constant for the radius
+    {% else %}
+    const NODE_RADIUS = node.deg*6;
+    {% endif %}
+    node_radii.push(NODE_RADIUS);
+    const geometry = new THREE.SphereGeometry(NODE_RADIUS, 32, 32); 
+    const material = new THREE.MeshBasicMaterial({ color: node.id === selectedId ? 0xff0000 : (node.id === targetId ? 0x00ffff : ((node.color != null) ? node.color : 0x00ff00)) });
+    const sphere = new THREE.Mesh(geometry, material);
+
+    // Initial position based on the calculated layout
+    sphere.position.set(node.x, node.y, node.z);
+    console.log("Node", node.id, "position:", node.x, node.y, node.z);
+    sphere.userData.id = node.id; // Keep a reference to the node ID
+
+    scene.add(sphere);
+    
+    // *NEW: Create the HTML label element*
+    const labelDiv = document.createElement('div');
+    // You can style this in your CSS
+    labelDiv.className = 'node-label'; 
+    labelDiv.textContent = `${node.id}`; 
+    // Example inline styling (better to use CSS classes)
+    // labelDiv.style.color = 'white';
+    // labelDiv.style.fontSize = '5px';
+    // labelDiv.style.fontFamily = 'Arial, sans-serif';
+    // labelDiv.style.padding = '0';
+    // labelDiv.style.backgroundColor = 'rgba(0,0,0,0.5)';
+    //labelDiv.style.borderRadius = '3px';
+
+    // *NEW: Create the CSS2DObject*
+    const nodeLabel = new CSS2DObject(labelDiv);
+    // Position the label slightly above the sphere
+    nodeLabel.position.set(0, NODE_RADIUS + 0.5, 0); 
+
+    sphere.add(nodeLabel); // Add the label as a child of the sphere
+    
+    // Store both the sphere and the label for easy access
+    nodeObjects[node.id] = { sphere: sphere, label: nodeLabel };
+});
+
+
+
+const geometry = new THREE.SphereGeometry(nodecount, 32, 32); 
+const material = new THREE.MeshBasicMaterial({ color: 0xffffff});
+window.origin = new THREE.Mesh(geometry, material);
+origin.visible = false;
+scene.add(origin);
+
+// 3 lines for world x, y, z axes (aka should rotate with the world) infinite length
+const axisLength = nodecount*100;
+const xaxisGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-axisLength, 0, 0), new THREE.Vector3(axisLength, 0, 0)]);
+window.xaxis = new THREE.Line(xaxisGeometry, new THREE.LineBasicMaterial({ color: 0xff0000 }));
+xaxis.visible = false;
+scene.add(xaxis);
+const yaxisGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -axisLength, 0), new THREE.Vector3(0, axisLength, 0)]);
+window.yaxis = new THREE.Line(yaxisGeometry, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+yaxis.visible = false;
+scene.add(yaxis);
+const zaxisGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -axisLength), new THREE.Vector3(0, 0, axisLength)]);
+window.zaxis = new THREE.Line(zaxisGeometry, new THREE.LineBasicMaterial({ color: 0x0000ff }));
+zaxis.visible = false;
+scene.add(zaxis);
+
+const setCameraPosition = () => {
+        const x = parseFloat(prompt("Enter camera X position:", camera.position.x));
+        const y = parseFloat(prompt("Enter camera Y position:", camera.position.y));
+        const z = parseFloat(prompt("Enter camera Z position:", camera.position.z));
+        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+            camera.position.set(x, y, z);
+            controls.update();
+        } else {
+            alert("Invalid input. Please enter numeric values.");
+        }
+    };
+
+
+
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'o') {
+        origin.visible = !origin.visible;
+        xaxis.visible = !xaxis.visible;
+        yaxis.visible = !yaxis.visible;
+        zaxis.visible = !zaxis.visible;
+
+    }
+    if (event.key === "l") {
+        console.log("Toggling labels");
+        Object.values(nodeObjects).forEach(obj => {
+            obj.label.element.classList.toggle('hidden');
+        });
+    }
+    if (event.key === "r") {
+        // Reset camera to initial position if no node selected, otherwise reset to selected node
+        if (window.snid && nodeObjects[window.snid]) {
+            const targetPosition = nodeObjects[window.snid].sphere.position;
+            controls.target.copy(targetPosition);
+            camera.position.set(targetPosition.x + 100, targetPosition.y + 100, targetPosition.z + 100);
+        } else {
+        console.log("Resetting camera");
+        controls.reset();
+        }
+    }
+    if (event.key === "s") {
+        console.log("Saving camera position");
+        console.log(`camera.position.set(${camera.position.x}, ${camera.position.y}, ${camera.position.z});`);
+        console.log(`controls.target.set(${controls.target.x}, ${controls.target.y}, ${controls.target.z});`);
+    }
+    if (event.key === "p") {
+        console.log("Printing node positions");
+        nodes3d.forEach(node => {
+            const obj = nodeObjects[node.id];
+            if (obj && obj.sphere) {
+                const pos = obj.sphere.position;
+                console.log(`Node ${node.id}: (${pos.x}, ${pos.y}, ${pos.z})`);
+            }
+        });
+    }
+    // use g to set camera position (open an interface to enter coordinates and a button that closes the interface and sets the camera position with the text "Go!")
+    if (event.key === "g") {
+        setCameraPosition();
+    }
+
+    if (event.key === 'w') {
+        // Move camera forward along its local z-axis
+        camera.translateZ(-10); // Move forward by 10 units
+        //controls.update();
+    }
+    if (event.key === 's') {
+        // Move camera backward along its local z-axis
+        camera.translateZ(10); // Move backward by 10 units
+        //controls.update();
+    }
+    if (event.key === 'a') {
+        // Move camera left along its local x-axis
+        camera.translateX(-10); // Move left by 10 units
+        //controls.update();
+    }
+    if (event.key === 'd') {
+        // Move camera right along its local x-axis
+        camera.translateX(10); // Move right by 10 units
+        //controls.update();
+    }
+    if (event.key === 'q') {
+        // Move camera up along its local y-axis
+        camera.translateY(10); // Move up by 10 units
+        //controls.update();
+    }
+    if (event.key === 'e') {
+        // Move camera down along its local y-axis
+        camera.translateY(-10); // Move down by 10 units
+        //controls.update();
+    }
+
+    if (event.key === 'Escape') {
+        // Deselect any selected node
+        Object.values(nodeObjects).forEach(obj => {
+            obj.sphere.material.color.set((obj.sphere.userData.id === selectedId) ? 0xff0000 : (obj.sphere.userData.id === targetId ? 0x00ffff : ((obj.sphere.userData.color != null) ? obj.sphere.userData.color : 0x00ff00)));
+        });
+        // Reset camera to initial position
+        controls.reset();
+    }
+
+    if (event.key === 'k') {
+        alert(window.snid);
+    }
+
+    // use the arrow keys to move through connections of the currently selected node and move the selection to that node.
+    // if there are multiple nodes in that direction, show the list to select from in a prompt, and allow the user to type in a number (generated by us) to select that node.
+    // if no node is selected, do nothing.
+    // if the selected node has no connections in that direction, do nothing.
+    // we use the physical 3d position of the nodes to determine which node to select next.
+    // up arrow to select the closest node in the direction behind the node relative to the camera's up vector
+    // down arrow to select the closest node in the direction in front of the node relative to the camera's up vector
+    // left arrow to select the closest node in the direction of the camera's left vector
+    // right arrow to select the closest node in the direction of the camera's right vector
+    // use v to to select node in the direction up from the current node
+    // use b to to select node in the direction down from the current node
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'v', 'b'].includes(event.key)) {
+        if (!window.snid) {
+            console.log("No node selected");
+            return;
+        }
+        const currentNode = nodeObjects[window.snid];
+        if (!currentNode) {
+            console.log("Current node not found in nodeObjects");
+            return;
+        }
+        const currentPos = currentNode.sphere.position;
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        let moveVector;
+        // up and down refer to far and near relative to the camera view, not the world y axis
+        switch (event.key) {
+            case 'ArrowUp':
+                moveVector = direction.clone().normalize();
+                break;
+            case 'ArrowDown':
+                moveVector = direction.clone().negate().normalize();
+                break;
+            case 'ArrowLeft':
+                moveVector = new THREE.Vector3().crossVectors(camera.up, direction).normalize();
+                break;
+            case 'ArrowRight':
+                moveVector = new THREE.Vector3().crossVectors(direction, camera.up).normalize();
+                break;
+            case 'v': // up
+                moveVector = camera.up.clone().normalize();
+                break;
+            case 'b': // down
+                moveVector = camera.up.clone().negate().normalize();
+                break;
+        }
+        if (!moveVector) return;
+        const connectedNodes = cy.getElementById(window.snid).neighborhood().map(node => node.id());
+        //console.log("Connected nodes:", connectedNodes);
+        var candidates = connectedNodes.map(id => {
+            const obj = nodeObjects[id];
+            if (!obj) return null;
+            const pos = obj.sphere.position;
+            const toNodeVec = new THREE.Vector3().subVectors(pos, currentPos).normalize();
+            const angle = moveVector.angleTo(toNodeVec);
+            const distance = currentPos.distanceTo(pos);
+            //console.log(`Candidate node ${id}: angle = ${angle}, distance = ${distance}`);
+            return { id, angle, distance };
+        })
+        //console.log(candidates);
+        candidates = candidates.filter(c => c !== null && c.angle < 3*Math.PI / 8); // 67.5 degree cone
+        if (candidates.length === 0) {
+            console.log("No connected nodes in that direction");
+            return;
+        }
+        candidates.sort((a, b) => a.angle - b.angle || a.distance - b.distance);
+        const nextNodeId = candidates[0].id;
+        console.log("Moving selection to node:", nextNodeId);
+        window.snid = nextNodeId;
+        // Highlight the selected node in yellow and reset others
+        Object.values(nodeObjects).forEach(obj => {
+            obj.sphere.material.color.set(obj.sphere.userData.id === nextNodeId ? 0xff0000 : (obj.sphere.userData.id === selectedId ? 0xff0000 : (obj.sphere.userData.id === targetId ? 0x00ffff : ((obj.sphere.userData.color != null) ? obj.sphere.userData.color : 0x00ff00))));
+        });
+        // Center the camera on the selected node
+        const targetPosition = nodeObjects[nextNodeId].sphere.position;
+        controls.target.copy(targetPosition);
+        controls.update();
+    }
+
+});
+
+window.snid = null;
+
+//write a standalone function to get the node that is under the mouse cursor
+function getNodeUnderMouse(event) {
+    // Calculate mouse position in normalized device coordinates (-1 to +1) for both components
+    const mouse = new THREE.Vector2();
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+
+    // Raycaster to find intersected objects
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, camera);
+
+    // Calculate objects intersecting the picking ray
+    const intersects = raycaster.intersectObjects(Object.values(nodeObjects).map(obj => obj.sphere));
+
+    if (intersects.length > 0) {
+        return intersects[0].object; // Return the first intersected object
+    }
+    return null; // No object found under the mouse
+}
+
+
+
+// select nodes by clicking on them and highlight them in yellow, unselecting all other nodes
+// also center the camera on the selected node
+window.addEventListener('click', (event) => {
+// ignore if shift is pressed
+    if (event.shiftKey) return;
+    const selectedNode = getNodeUnderMouse(event);
+    if (selectedNode) {
+        const nodeId = selectedNode.userData.id;
+        console.log("Clicked on node:", nodeId);
+        window.snid = nodeId;
+
+        // Highlight the selected node in yellow and reset others
+        Object.values(nodeObjects).forEach(obj => {
+            obj.sphere.material.color.set(obj.sphere.userData.id === nodeId ? 0xff0000 : (obj.sphere.userData.id === selectedId ? 0xff0000 : (obj.sphere.userData.id === targetId ? 0x00ffff : ((obj.sphere.userData.color != null) ? obj.sphere.userData.color : 0x00ff00))));
+        });
+
+        // Center the camera on the selected node
+        const targetPosition = selectedNode.position;
+        controls.target.copy(targetPosition);
+        controls.update();
+    }
+});
+
+function mapGrey(weight) {
+    // Map weight to a grayscale value (0-255)
+    const maxWeight = 14;
+    const ratio = weight / maxWeight;
+    const gray = Math.floor(255 * ratio);
+    return (gray << 16) | (gray << 8) | gray; // Convert to hex color
+}
+function calcWidth(weight) {
+    // Map weight to a suitable line width (adjust as needed)
+    const minWidth = 1;
+    {% if nodecount < 20 %}
+    const maxWidth = Math.min(...node_radii)/2;
+    {% else %}
+    const maxWidth = 8;
+    {% endif %}
+    const maxWeight = Math.max(...links3d.map(l => ({{weightfactor}}/l.weight)));
+    return minWidth + (weight / maxWeight) * (maxWidth - minWidth);
+}
+
+function mapColorBrightnessFromColor(color, weight) {
+    // Adjust brightness based on weight
+    const maxWeight = 14;
+    const ratio = weight / maxWeight;
+    const factor = 0.5 + (0.5 * (1 - ratio)); // Scale between 0.5 and 1
+    const r = Math.min(255, Math.floor(((color >> 16) & 0xff) * factor));
+    const g = Math.min(255, Math.floor(((color >> 8) & 0xff) * factor));
+    const b = Math.min(255, Math.floor((color & 0xff) * factor));
+    return (r << 16) | (g << 8) | b; // Convert to hex color
+}
+
+// Edge: Use a BufferGeometry or LineSegments
+const edgeLines = []; // To store the 3D line objects
+links3d.forEach(link => {
+    const w = {{weightfactor}}/link.weight;
+    // Note: window.innerWidth/Height is fine for initial value
+    const material = new LineMaterial({ color: (w == 5.181) ? 0xffff00 : (link.t == 'yg') ? mapColorBrightnessFromColor(0xff0000, w) : mapGrey(w), linewidth: calcWidth(w), worldUnits: true }); // worldUnits: false is usually better for screen-space thickness
+    material.resolution.set(width, height); // Use container dimensions for initial set
+    
+    const geometry = new LineSegmentsGeometry(); 
+    // We can remove the redundant setAttribute('position') here, as setPositions will overwrite it later.
+    
+    const line = new LineSegments2(geometry, material); 
+    scene.add(line);
+    edgeLines.push(line);
+});
+
+
+
+// --- 5. Update and Animation Loop ---
+
+// This function updates the 3D positions of the nodes and edges
+// --- 5. Update and Animation Loop (MODIFIED) ---
+var ticks = 0;
+// This function updates the 3D positions of the nodes and edges
+function updateGraphPositions() {
+    // Update Node positions from the simulation data (No Change Here)
+    nodes3d.forEach(node => {
+        const nodeObject = nodeObjects[node.id];
+        if (nodeObject && nodeObject.sphere) {
+            nodeObject.sphere.position.set(node.x, node.y, node.z);
+        }
+    });
+
+    // Update Edge positions
+    edgeLines.forEach((line, index) => {
+        const link = links3d[index];
+        
+        const sourceId = link.source.id; 
+        const targetId = link.target.id;
+
+        const sourceObject = nodeObjects[sourceId];
+        const targetObject = nodeObjects[targetId];
+
+        if (sourceObject && targetObject) {
+            const sourceNode = sourceObject.sphere;
+            const targetNode = targetObject.sphere;
+            
+            // Re-create the Float32Array
+            const positions = new Float32Array([
+                sourceNode.position.x, sourceNode.position.y, sourceNode.position.z,
+                targetNode.position.x, targetNode.position.y, targetNode.position.z
+            ]);
+            
+            // ----------------------------------------------------------------
+            // *** THE CRITICAL FIX: Use setPositions() ***
+            // ----------------------------------------------------------------
+            line.geometry.setPositions(positions);
+            
+            // Since we are using LineSegments2, we no longer manually set 
+            // the 'position' attribute or set needsUpdate = true.
+            // The LineSegmentsGeometry handles the internal BufferAttributes
+            // when setPositions is called.
+            
+            // Remove or comment out these lines:
+            // const positionAttribute = line.geometry.getAttribute('position');
+            // positionAttribute.copyArray(positions);
+            // positionAttribute.needsUpdate = true; 
+        }
+    });
+    
+    
+}
+
+// The core Three.js animation loop
+function animate() {
+    requestAnimationFrame(animate);
+
+    if (ticks < 100) {
+        for (let i = 0; i < 3; i++) {
+            simulation.tick(); // Advance the simulation
+        }
+        ticks++;
+    }
+
+    // Update node and edge positions from the simulation
+    updateGraphPositions();
+
+    controls.update(); // Update the orbit controls
+    renderer.render(scene, camera);
+    // Render the CSS labels
+    labelRenderer.render(scene, camera); 
+}
+
+// Initial update and start the animation loop
+updateGraphPositions();
+animate();
+
+// --- OPTIONAL: Handle Window Resize ---
+// --- OPTIONAL: Handle Window Resize (MODIFIED) ---
+window.addEventListener('resize', () => {
+    const newWidth = container.clientWidth;
+    const newHeight = container.clientHeight;
+    
+    // WebGL Renderer
+    renderer.setSize(newWidth, newHeight);
+    camera.aspect = newWidth / newHeight;
+    camera.updateProjectionMatrix();
+
+    // *NEW: CSS Label Renderer*
+    labelRenderer.setSize(newWidth, newHeight); 
+    
+    // ----------------------------------------------------------------
+    // *** CRITICAL: Update LineMaterial Resolution ***
+    // ----------------------------------------------------------------
+    edgeLines.forEach(line => {
+        // line.material is a LineMaterial instance
+        line.material.resolution.set(newWidth, newHeight);
+    });
+});
+
+    {% endif %}
 
 </script>

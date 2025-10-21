@@ -1,4 +1,4 @@
-from flask import Blueprint, session, redirect, url_for, request, render_template
+from flask import Blueprint, abort, session, redirect, url_for, request, render_template
 from config import GRAPH_CONFIGS
 from functions import get_db_connection
 import networkx as nx
@@ -18,6 +18,9 @@ def graph_route():
     except:
         raise
     
+    if len(GRAPH_CONFIGS) == 0:
+        abort(418)
+
     G = nx.Graph()
 
     weightfactor = request.args.get("weightfactor",3, type=float)
@@ -41,15 +44,15 @@ def graph_route():
                     continue
                 if only_with_tag_one:
                     tag_only_clause_one = f""" \
-            and (exists (select 1 from {gconf['tags_jct_table']['name']} where p1 = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_one})) \
-            or exists (select 1 from {gconf['tags_jct_table']['name']} where p2 = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_one}))) """
+            and (exists (select 1 from {gconf['tags_jct_table']['name']} where {gconf['id1']} = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_one})) \
+            or exists (select 1 from {gconf['tags_jct_table']['name']} where {gconf['id2']} = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_one}))) """
                 else:
                     tag_only_clause_one = ""
 
                 if only_with_tag_both:
                     tag_only_clause_both = f""" \
-            and (exists (select 1 from {gconf['tags_jct_table']['name']} where p1 = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_both})) \
-            and exists (select 1 from {gconf['tags_jct_table']['name']} where p2 = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_both}))) 
+            and (exists (select 1 from {gconf['tags_jct_table']['name']} where {gconf['id1']} = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_both})) \
+            and exists (select 1 from {gconf['tags_jct_table']['name']} where {gconf['id2']} = {gconf['tags_jct_table']['c1']} and {gconf['tags_jct_table']['c2']} in ({only_with_tag_both}))) 
             """
                 else:
                     tag_only_clause_both = ""
@@ -78,10 +81,22 @@ def graph_route():
     no_ignore_weights = request.args.get("no_ignore_weights", False, type=bool)
     ignore = request.args.get("ignore", type=lambda x: x.split(','))
     cutoff = request.args.get("cutoff", 4, type=lambda x:min(int(x), 7))
+    rr_out = request.args.get("ring", type=int)
+    rr_in = request.args.get("ring_in", type=int)
 
     if (src is not None and distance is not None): #type: ignore
         print("YAY SOMEONE KNOWS HOW TO USE TS")
         G = nx.ego_graph(G, src, distance)
+    if (src is not None and rr_out is not None):
+        print("src + ring")
+        nodes_at_distance_out = set(nx.descendants_at_distance(G, src, rr_out))
+        nodes_up_to_distance_in = set()
+        if rr_in is None: rr_in = rr_out-1
+        for i in range(rr_out, rr_in, -1):
+            nodes_up_to_distance_in |= set(nx.descendants_at_distance(G, src, i))
+        
+        nodes_up_to_distance_in.add(src) # ensure the source is included
+        G = G.subgraph(nodes_at_distance_out | nodes_up_to_distance_in)
     elif (src is not None and target is not None):
         print('src not none and target specified')
         H = nx.Graph()
@@ -117,4 +132,5 @@ def graph_route():
         dist = distance,
         ignore = ignore,
         weightfactor = weightfactor,
+        layout=request.args.get("layout","cose")
     )
